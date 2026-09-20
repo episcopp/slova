@@ -327,61 +327,69 @@ async function pdfToText(file){
   return lines.join('\n');
 }
 
-/* ---------- cloud sync (Supabase) ---------- */
-const CLOUD_KEY='slova_cloud_v1';
-// Якщо вписати адресу й ключ сюди, вводити їх на кожному пристрої не потрібно.
-const BUILT_IN={url:'',key:''};
+/* ---------- cloud sync (Firebase: Auth + Firestore) ---------- */
+const CLOUD_KEY='slova_cloud_fb1';
+// Якщо вписати сюди apiKey і projectId з Firebase, вводити їх на кожному пристрої не потрібно.
+const BUILT_IN={apiKey:'',projectId:''};
+const FB_BASE='https://www.gstatic.com/firebasejs/10.14.1/';
 let cloud={};
 try{cloud=JSON.parse(localStorage.getItem(CLOUD_KEY))||{};}catch(e){cloud={};}
 const saveCloud=()=>{try{localStorage.setItem(CLOUD_KEY,JSON.stringify(cloud));}catch(e){}};
-const cfg=()=>({url:String(BUILT_IN.url||cloud.url||'').trim().replace(/\/+$/,''),key:String(BUILT_IN.key||cloud.key||'').trim()});
-const configured=()=>{const c=cfg();return !!(c.url&&c.key);};
-const loggedIn=()=>!!(cloud.session&&configured());
+const cfg=()=>({apiKey:String(BUILT_IN.apiKey||cloud.apiKey||'').trim(),projectId:String(BUILT_IN.projectId||cloud.projectId||'').trim()});
+const configured=()=>{const c=cfg();return !!(c.apiKey&&c.projectId);};
+const loggedIn=()=>!!(cloud.email&&configured());
 const wkey=w=>(w.uk||'').trim().toLowerCase()+'|'+(w.tl||'').trim().toLowerCase();
 function tombstone(w){if(!store.tomb)store.tomb={};store.tomb[store.lang+'|'+wkey(w)]=Date.now();}
 
+const ERR={
+  'auth/invalid-credential':'Невірний email або пароль.',
+  'auth/wrong-password':'Невірний email або пароль.',
+  'auth/invalid-login-credentials':'Невірний email або пароль.',
+  'auth/user-not-found':'Такого акаунта немає. Натисніть «Створити акаунт».',
+  'auth/email-already-in-use':'Такий акаунт уже є. Натисніть «Увійти».',
+  'auth/weak-password':'Пароль надто короткий (мінімум 6 символів).',
+  'auth/invalid-email':'Некоректний email.',
+  'auth/missing-password':'Введіть пароль.',
+  'auth/network-request-failed':'Немає зв’язку з інтернетом.',
+  'auth/operation-not-allowed':'У Firebase не увімкнено вхід за email і паролем (Authentication → Sign-in method → Email/Password).',
+  'auth/configuration-not-found':'У Firebase не налаштовано Authentication (Build → Authentication → Get started).',
+  'auth/invalid-api-key':'Неправильний apiKey.',
+  'auth/too-many-requests':'Забагато спроб. Зачекайте кілька хвилин.',
+  'permission-denied':'Firestore відхилив запит. Перевірте правила (Rules) з інструкції.',
+  'unavailable':'Немає зв’язку з Firestore.',
+  'not-found':'У проєкті не створена база Firestore (Build → Firestore Database → Create database).'
+};
 function friendly(e){
-  const m=String((e&&e.message)||e);
-  if(m==='confirm')return 'У Supabase увімкнено підтвердження email. Вимкніть «Confirm email» (Authentication → Sign In / Providers → Email) і спробуйте ще раз.';
-  if(/Invalid login/i.test(m))return 'Невірний email або пароль.';
-  if(/already registered|already been registered/i.test(m))return 'Такий акаунт уже є. Натисніть «Увійти».';
-  if(/Password should be|at least/i.test(m))return 'Пароль надто короткий (мінімум 6 символів).';
-  if(/Failed to fetch|NetworkError|Load failed/i.test(m))return 'Немає зв’язку або неправильна адреса проєкту.';
-  if(/vocab_state|schema cache|relation/i.test(m))return 'У базі немає таблиці vocab_state. Виконайте SQL з інструкції.';
-  if(/Invalid API key|apikey/i.test(m))return 'Неправильний ключ (потрібен anon public).';
+  const code=e&&e.code,m=String((e&&e.message)||e);
+  if(code&&ERR[code])return ERR[code];
   if(m==='nosession')return 'Сесія завершилась. Увійдіть ще раз.';
+  if(/Failed to fetch|Failed to load/i.test(m))return 'Не вдалося завантажити Firebase. Перевірте інтернет.';
+  if(/API key not valid/i.test(m))return 'Неправильний apiKey.';
   return m;
 }
-async function authCall(path,body){
-  const c=cfg();
-  const r=await fetch(c.url+path,{method:'POST',headers:{apikey:c.key,'Content-Type':'application/json'},body:JSON.stringify(body)});
-  const j=await r.json().catch(()=>({}));
-  if(!r.ok)throw new Error(j.error_description||j.msg||j.message||('HTTP '+r.status));
-  return j;
+let fbReady=null;
+function loadScript(src){return new Promise((res,rej)=>{const t=document.createElement('script');t.src=src;t.onload=res;t.onerror=()=>rej(new Error('Failed to load '+src));document.head.appendChild(t);});}
+function initFirebase(){
+  if(fbReady)return fbReady;
+  fbReady=(async()=>{
+    if(!window.firebase){
+      await loadScript(FB_BASE+'firebase-app-compat.js');
+      await loadScript(FB_BASE+'firebase-auth-compat.js');
+      await loadScript(FB_BASE+'firebase-firestore-compat.js');
+    }
+    const c=cfg();
+    if(!window.firebase.apps.length)window.firebase.initializeApp({apiKey:c.apiKey,projectId:c.projectId,authDomain:c.projectId+'.firebaseapp.com'});
+    return window.firebase;
+  })().catch(e=>{fbReady=null;throw e;});
+  return fbReady;
 }
-function setSession(j){
-  cloud.session={access_token:j.access_token,refresh_token:j.refresh_token,expires_at:Date.now()+((j.expires_in||3600)*1000)-60000,
-    user:{id:(j.user&&j.user.id)||(cloud.session&&cloud.session.user&&cloud.session.user.id),email:(j.user&&j.user.email)||(cloud.session&&cloud.session.user&&cloud.session.user.email)}};
-  saveCloud();
+async function currentUser(){
+  const fb=await initFirebase(),auth=fb.auth();
+  return new Promise(res=>{const un=auth.onAuthStateChanged(u=>{un();res(u);});});
 }
-async function signIn(email,pw){setSession(await authCall('/auth/v1/token?grant_type=password',{email,password:pw}));}
-async function signUp(email,pw){
-  const j=await authCall('/auth/v1/signup',{email,password:pw});
-  if(!j.access_token)throw new Error('confirm');
-  setSession(j);
-}
-async function token(){
-  const ss=cloud.session;if(!ss)throw new Error('nosession');
-  if(Date.now()<ss.expires_at)return ss.access_token;
-  try{setSession(await authCall('/auth/v1/token?grant_type=refresh_token',{refresh_token:ss.refresh_token}));}
-  catch(e){if(!/Failed to fetch|NetworkError|Load failed/i.test(String(e.message))){cloud.session=null;saveCloud();throw new Error('nosession');}throw e;}
-  return cloud.session.access_token;
-}
-async function rest(method,qs,body,extra){
-  const c=cfg(),t=await token();
-  const r=await fetch(c.url+'/rest/v1/vocab_state'+qs,{method,headers:Object.assign({apikey:c.key,Authorization:'Bearer '+t,'Content-Type':'application/json'},extra||{}),body:body?JSON.stringify(body):undefined});
-  if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.message||('HTTP '+r.status));}
-  return r.status===204?null:await r.json().catch(()=>null);
+function parseConfig(text){
+  const g=k=>{const m=String(text).match(new RegExp(k+'["\']?\\s*:\\s*["\']([^"\']+)["\']'));return m?m[1].trim():'';};
+  return{apiKey:g('apiKey'),projectId:g('projectId')};
 }
 function mergeRemote(rm){
   const tomb=Object.assign({},rm.tomb||{});
@@ -418,15 +426,18 @@ async function syncNow(){
   if(!loggedIn()||syncing||view==='lesson')return;
   syncing=true;paintStatus('Синхронізація…');
   try{
-    const rows=await rest('GET','?select=data&limit=1');
-    const remote=rows&&rows[0]&&rows[0].data;
-    if(remote)mergeRemote(remote);
-    const uid=cloud.session.user&&cloud.session.user.id;
-    await rest('POST','?on_conflict=user_id',{user_id:uid,data:{words:store.words,tomb:store.tomb||{},streak:store.streak},updated_at:new Date().toISOString()},{Prefer:'resolution=merge-duplicates,return=minimal'});
+    const u=await currentUser();
+    if(!u){cloud.email='';saveCloud();throw new Error('nosession');}
+    const ref=window.firebase.firestore().collection('users').doc(u.uid);
+    const snap=await ref.get();
+    const d=snap.exists?snap.data():null;
+    if(d&&d.data){let remote=null;try{remote=JSON.parse(d.data);}catch(e){}if(remote)mergeRemote(remote);}
+    await ref.set({data:JSON.stringify({words:store.words,tomb:store.tomb||{},streak:store.streak}),updatedAt:new Date().toISOString()});
     cloud.last=Date.now();cloud.err='';saveCloud();
     if(view==='home'||view==='list')render();else paintStatus(statusText());
   }catch(e){
-    cloud.err=friendly(e);saveCloud();paintStatus(statusText());
+    cloud.err=friendly(e);saveCloud();
+    if(view==='home')render();else paintStatus(statusText());
   }finally{syncing=false;}
 }
 async function doAuth(kind){
@@ -434,8 +445,10 @@ async function doAuth(kind){
   if(!email||!pw){msg.textContent='Введіть email і пароль.';return;}
   msg.textContent='Зачекайте…';
   try{
-    if(kind==='up')await signUp(email,pw);else await signIn(email,pw);
-    cloud.err='';await syncNow();
+    const fb=await initFirebase(),a=fb.auth();
+    const cred=kind==='up'?await a.createUserWithEmailAndPassword(email,pw):await a.signInWithEmailAndPassword(email,pw);
+    cloud.email=(cred.user&&cred.user.email)||email;cloud.err='';saveCloud();
+    await syncNow();
     if(cloud.err){renderSync();return;}
     toast('Синхронізацію увімкнено');go('home');
   }catch(e){msg.textContent=friendly(e);}
@@ -443,9 +456,9 @@ async function doAuth(kind){
 function renderSync(){
   let body='';
   if(!configured()){
-    body=`<p class="note">Скопіюйте з Supabase (Project Settings → API) адресу проєкту та ключ «anon public».</p>
-    <section><label class="lbl" for="curl">Project URL</label><input id="curl" class="input" placeholder="https://xxxx.supabase.co" value="${esc(cloud.url||'')}" autocomplete="off" spellcheck="false"></section>
-    <section><label class="lbl" for="ckey">Ключ anon public</label><input id="ckey" class="input" placeholder="eyJ…" value="${esc(cloud.key||'')}" autocomplete="off" spellcheck="false"></section>
+    body=`<p class="note">У Firebase відкрийте Project settings → Your apps → додайте веб-застосунок (&lt;/&gt;) і скопіюйте блок <b>firebaseConfig</b>. Вставте його сюди повністю.</p>
+    <section><label class="lbl" for="cfgtxt">firebaseConfig</label><textarea id="cfgtxt" class="paste" style="min-height:170px" spellcheck="false" placeholder='const firebaseConfig = {&#10;  apiKey: "AIza…",&#10;  projectId: "my-project",&#10;  …&#10;};'></textarea></section>
+    <p class="note warn" id="smsg" role="status"></p>
     <button class="btn green" id="csave">Зберегти</button>`;
   }else if(!loggedIn()){
     body=`<p class="note">Один акаунт на всіх ваших пристроях. Слова й прогрес синхронізуються автоматично.</p>
@@ -453,22 +466,31 @@ function renderSync(){
     <section><label class="lbl" for="pw">Пароль (мінімум 6 символів)</label><input id="pw" class="input" type="password" autocomplete="current-password"></section>
     <p class="note warn" id="smsg" role="status"></p>
     <button class="btn green" id="cin">Увійти</button>
-    <button class="btn ghost" id="cup">Створити акаунт</button>`;
+    <button class="btn ghost" id="cup">Створити акаунт</button>
+    <button class="linkbtn" id="creset" style="align-self:flex-start;color:var(--muted)">Змінити налаштування Firebase</button>`;
   }else{
-    body=`<p class="note">Ви увійшли як <b>${esc((cloud.session.user&&cloud.session.user.email)||'')}</b>.</p>
+    body=`<p class="note">Ви увійшли як <b>${esc(cloud.email||'')}</b>.</p>
     <p class="note" id="cstat">${esc(statusText())}</p>
     <p class="note warn" id="smsg" role="status">${cloud.err?esc(cloud.err):''}</p>
     <button class="btn green" id="cnow">Синхронізувати зараз</button>
     <button class="btn ghost" id="cout">Вийти з акаунта</button>`;
   }
   app.innerHTML=`<div class="top"><button class="icon" id="back" aria-label="Назад">←</button><div style="flex:1;font-weight:900;font-size:20px">Синхронізація</div></div><main class="pad">${body}</main>`;
-  $('#back').onclick=()=>go('home');
   const g=id=>$(id);
-  if(g('#csave'))g('#csave').onclick=()=>{cloud.url=g('#curl').value.trim();cloud.key=g('#ckey').value.trim();saveCloud();renderSync();};
+  g('#back').onclick=()=>go('home');
+  if(g('#csave'))g('#csave').onclick=()=>{
+    const c=parseConfig(g('#cfgtxt').value);
+    if(!c.apiKey||!c.projectId){g('#smsg').textContent='Не знайшов apiKey і projectId. Вставте блок firebaseConfig повністю.';return;}
+    cloud.apiKey=c.apiKey;cloud.projectId=c.projectId;saveCloud();renderSync();
+  };
   if(g('#cin'))g('#cin').onclick=()=>doAuth('in');
   if(g('#cup'))g('#cup').onclick=()=>doAuth('up');
+  if(g('#creset'))g('#creset').onclick=()=>{cloud.apiKey='';cloud.projectId='';saveCloud();location.reload();};
   if(g('#cnow'))g('#cnow').onclick=async()=>{await syncNow();renderSync();};
-  if(g('#cout'))g('#cout').onclick=()=>{cloud.session=null;cloud.err='';cloud.last=0;saveCloud();renderSync();};
+  if(g('#cout'))g('#cout').onclick=async()=>{
+    try{const fb=await initFirebase();await fb.auth().signOut();}catch(e){}
+    cloud.email='';cloud.err='';cloud.last=0;saveCloud();renderSync();
+  };
 }
 
 /* ---------- views ---------- */
