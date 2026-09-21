@@ -8,7 +8,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Слова">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦉</text></svg>">
+<link rel="icon" type="image/png" href="icon.png?v=2">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=2">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet">
@@ -161,7 +162,7 @@ const ROUND=10;
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 
 /* ---------- storage ---------- */
-const blank=()=>({lang:'it-IT',mode:'speak',theme:'auto',words:{},tomb:{},streak:{last:'',n:0}});
+const blank=()=>({lang:'it-IT',mode:'speak',theme:'auto',sound:true,words:{},tomb:{},streak:{last:'',n:0}});
 let store=load();
 function load(){
   try{const r=localStorage.getItem(KEY);if(r){return Object.assign(blank(),JSON.parse(r));}}catch(e){}
@@ -178,6 +179,42 @@ function applyTheme(){
   if(store.theme==='dark'||store.theme==='light')r.setAttribute('data-theme',store.theme);else r.removeAttribute('data-theme');
 }
 const isDark=()=>store.theme==='dark'||(store.theme!=='light'&&!!window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches);
+
+/* ---------- sounds (synthesized, no audio files) ---------- */
+let actx=null;
+function audio(){
+  try{
+    if(!actx){const C=window.AudioContext||window.webkitAudioContext;if(C)actx=new C();}
+    if(actx&&actx.state==='suspended')actx.resume();
+  }catch(e){}
+  return actx;
+}
+['pointerdown','keydown','touchend'].forEach(ev=>document.addEventListener(ev,()=>{audio();},{passive:true}));
+function playSound(kind){
+  if(store.sound===false)return;
+  const ctx=audio();if(!ctx)return;
+  try{
+    const now=ctx.currentTime+0.02;
+    const note=(f,t,d,type,g,lp)=>{
+      const o=ctx.createOscillator(),gn=ctx.createGain();
+      o.type=type;o.frequency.setValueAtTime(f,now+t);
+      gn.gain.setValueAtTime(0.0001,now+t);
+      gn.gain.exponentialRampToValueAtTime(g,now+t+0.015);
+      gn.gain.exponentialRampToValueAtTime(0.0001,now+t+d);
+      if(lp){const fl=ctx.createBiquadFilter();fl.type='lowpass';fl.frequency.value=lp;o.connect(fl);fl.connect(gn);}else o.connect(gn);
+      gn.connect(ctx.destination);o.start(now+t);o.stop(now+t+d+0.05);
+    };
+    if(kind==='ok'){
+      note(784,0,.16,'sine',.22);note(1568,0,.16,'sine',.05);
+      note(1175,.09,.42,'sine',.24);note(2350,.09,.3,'sine',.05);
+    }else if(kind==='bad'){
+      note(247,0,.2,'triangle',.28,900);note(185,.17,.34,'triangle',.28,700);
+    }else if(kind==='done'){
+      [523,659,784,1047].forEach((f,i)=>note(f,i*.11,.4,'sine',.2));
+      note(1047,.44,.6,'sine',.2);note(1319,.44,.6,'sine',.1);
+    }
+  }catch(e){}
+}
 
 /* ---------- helpers ---------- */
 const app=document.getElementById('app');
@@ -467,10 +504,12 @@ function renderSync(){
     <p class="note warn" id="smsg" role="status"></p>
     <button class="btn green" id="cin">Увійти</button>
     <button class="btn ghost" id="cup">Створити акаунт</button>
+    <button class="linkbtn" id="cforgot" style="align-self:flex-start;color:var(--muted)">Забули пароль?</button>
     <button class="linkbtn" id="creset" style="align-self:flex-start;color:var(--muted)">Змінити налаштування Firebase</button>`;
   }else{
     body=`<p class="note">Ви увійшли як <b>${esc(cloud.email||'')}</b>.</p>
     <p class="note" id="cstat">${esc(statusText())}</p>
+    <p class="note">Після виходу слова на цьому пристрої очищаються. У хмарі вони залишаються, і з’являться знову після входу.</p>
     <p class="note warn" id="smsg" role="status">${cloud.err?esc(cloud.err):''}</p>
     <button class="btn green" id="cnow">Синхронізувати зараз</button>
     <button class="btn ghost" id="cout">Вийти з акаунта</button>`;
@@ -485,10 +524,21 @@ function renderSync(){
   };
   if(g('#cin'))g('#cin').onclick=()=>doAuth('in');
   if(g('#cup'))g('#cup').onclick=()=>doAuth('up');
+  if(g('#cforgot'))g('#cforgot').onclick=async()=>{
+    const email=(g('#em').value||'').trim(),msg=g('#smsg');
+    if(!email){msg.textContent='Введіть email вище, і ми надішлемо лист для відновлення пароля.';return;}
+    msg.textContent='Зачекайте…';
+    try{const fb=await initFirebase();await fb.auth().sendPasswordResetEmail(email);msg.textContent='Якщо такий акаунт є, лист для відновлення пароля надіслано на '+email+'. Перевірте також «Спам».';}
+    catch(e){msg.textContent=friendly(e);}
+  };
   if(g('#creset'))g('#creset').onclick=()=>{cloud.apiKey='';cloud.projectId='';saveCloud();location.reload();};
   if(g('#cnow'))g('#cnow').onclick=async()=>{await syncNow();renderSync();};
   if(g('#cout'))g('#cout').onclick=async()=>{
+    g('#smsg').textContent='Зберігаю слова в хмарі…';
+    await syncNow();
+    if(cloud.err){g('#smsg').textContent='Вихід скасовано, щоб не втратити слова. Причина: '+cloud.err;return;}
     try{const fb=await initFirebase();await fb.auth().signOut();}catch(e){}
+    store.words={};store.tomb={};store.streak={last:'',n:0};save();
     cloud.email='';cloud.err='';cloud.last=0;saveCloud();renderSync();
   };
 }
@@ -508,7 +558,7 @@ function renderHome(){
   if(store.mode==='speak'&&!SR)note='<p class="note warn">Цей браузер не вміє розпізнавати мовлення. Відкрийте застосунок у Chrome або Edge на комп\'ютері.</p>';
   else if(store.mode==='speak')note='<p class="note">Розпізнавання працює найкраще в Chrome або Edge. Браузер попросить доступ до мікрофона.</p>';
   app.innerHTML=`
-  <header class="head"><div class="logo">слова</div><div class="hright"><div class="streak" title="Днів підряд">🔥 ${store.streak.n||0}</div><button class="icon" id="theme" aria-label="${isDark()?'Увімкнути світлу тему':'Увімкнути темну тему'}">${isDark()?'☀️':'🌙'}</button></div></header>
+  <header class="head"><div class="logo">слова</div><div class="hright"><div class="streak" title="Днів підряд">🔥 ${store.streak.n||0}</div><button class="icon" id="snd" aria-label="${store.sound===false?'Увімкнути звуки':'Вимкнути звуки'}">${store.sound===false?'🔇':'🔊'}</button><button class="icon" id="theme" aria-label="${isDark()?'Увімкнути світлу тему':'Увімкнути темну тему'}">${isDark()?'☀️':'🌙'}</button></div></header>
   <main class="pad">
     <section>
       <label class="lbl" for="lang">Мова, яку вивчаю</label>
@@ -535,6 +585,7 @@ function renderHome(){
       ${loggedIn()?`<p class="hint" id="cstat">${esc(statusText())}</p>`:''}
     </div>
   </main>`;
+  $('#snd').onclick=()=>{store.sound=store.sound===false;save();if(store.sound)playSound('ok');render();};
   $('#theme').onclick=()=>{store.theme=isDark()?'light':'dark';save();applyTheme();render();};
   $('#lang').onchange=e=>{store.lang=e.target.value;save();render();};
   $$('.seg button').forEach(b=>b.onclick=()=>{store.mode=b.dataset.mode;save();render();});
@@ -691,11 +742,11 @@ function renderLesson(){
     $('#hear').onclick=()=>say(w.tl);
     $('#primary').onclick=commit;
     const ag=$('#again');if(ag)ag.onclick=()=>{L.stage='ask';L.res=null;renderLesson();};
-    const fo=$('#force');if(fo)fo.onclick=()=>{L.res={kind:'ok',said:L.res.said,viaSpeech:L.res.viaSpeech};renderLesson();};
-    if(L.res.kind!=='ok')say(w.tl);
+    const fo=$('#force');if(fo)fo.onclick=()=>{L.res={kind:'ok',said:L.res.said,viaSpeech:L.res.viaSpeech};playSound('ok');renderLesson();};
+    if(L.res.kind!=='ok')setTimeout(()=>{if(view==='lesson'&&L&&L.stage==='result'&&L.res&&L.res.kind!=='ok'&&cw()===w)say(w.tl);},750);
   }
 }
-function finishAnswer(r){L.res=r;L.stage='result';renderLesson();}
+function finishAnswer(r){L.res=r;L.stage='result';playSound(r.kind==='ok'?'ok':'bad');renderLesson();}
 
 function commit(){
   const w=cw(),first=!L.retry.has(w.id),ok=L.res.kind==='ok';
@@ -713,7 +764,7 @@ function commit(){
 function finishLesson(){
   const today=new Date().toLocaleDateString('sv'),y=new Date(Date.now()-864e5).toLocaleDateString('sv');
   if(store.streak.last!==today){store.streak.n=(store.streak.last===y?(store.streak.n||0):0)+1;store.streak.last=today;save();}
-  go('done');scheduleSync();
+  go('done');playSound('done');scheduleSync();
 }
 function renderDone(){
   const acc=Math.round(L.firstOk/L.total*100),ws=cur();
