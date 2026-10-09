@@ -228,17 +228,36 @@ const $=(s,r)=>(r||document).querySelector(s);
 const $$=(s,r)=>Array.from((r||document).querySelectorAll(s));
 const ICON_MIC='<svg viewBox="0 0 24 24" width="44" height="44" fill="currentColor" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>';
 const ICON_SPK='<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M3 10v4h4l5 5V5L7 10H3zm13.5 2a4.5 4.5 0 0 0-2.5-4.03v8.06A4.5 4.5 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06a9 9 0 0 0 0-17.54z"/></svg>';
+const ICON_IDK='<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 1 2.64 6.36"/><path d="M3 21v-5h5"/></svg>';
 let toastT=null;
 function toast(msg){
   let t=$('.toast');if(t)t.remove();
   t=document.createElement('div');t.className='toast';t.setAttribute('role','status');t.textContent=msg;
   document.body.appendChild(t);clearTimeout(toastT);toastT=setTimeout(()=>t.remove(),4200);
 }
+const VOICE_SAMPLE={it:'Ciao, come stai? Questa è la mia voce.',en:'Hello, how are you? This is my voice.',fr:'Bonjour, comment ça va ? Voici ma voix.',de:'Hallo, wie geht es dir? Das ist meine Stimme.',es:'Hola, ¿cómo estás? Esta es mi voz.',pt:'Olá, como está? Esta é a minha voz.',pl:'Cześć, jak się masz? To jest mój głos.'};
+function pickVoice(lang){
+  try{
+    const name=store.voice&&store.voice[lang||store.lang];if(!name)return null;
+    return speechSynthesis.getVoices().find(v=>v.name===name)||null;
+  }catch(e){return null;}
+}
 function say(text){
   try{
     const clean=String(text).split('/')[0].replace(/\([^)]*\)/g,'').trim();
     speechSynthesis.cancel();
-    const u=new SpeechSynthesisUtterance(clean);u.lang=store.lang;u.rate=.9;speechSynthesis.speak(u);
+    const u=new SpeechSynthesisUtterance(clean);u.lang=store.lang;u.rate=.9;
+    const v=pickVoice();if(v)u.voice=v;
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+function sayVoiceSample(name,lang){
+  try{
+    speechSynthesis.cancel();
+    const v=speechSynthesis.getVoices().find(x=>x.name===name);
+    const u=new SpeechSynthesisUtterance(VOICE_SAMPLE[short()]||'Ciao, come stai?');
+    u.lang=(v&&v.lang)||lang||store.lang;if(v)u.voice=v;u.rate=.9;
+    speechSynthesis.speak(u);
   }catch(e){}
 }
 
@@ -554,7 +573,7 @@ function go(v){view=v;render();}
 function render(){
   stopListen();
   app.style.paddingBottom='';
-  ({home:renderHome,import:renderImport,list:renderList,lesson:renderLesson,done:renderDone,sync:renderSync,conjsetup:renderConjSetup})[view]();
+  ({home:renderHome,import:renderImport,list:renderList,lesson:renderLesson,done:renderDone,sync:renderSync,conjsetup:renderConjSetup,voice:renderVoice})[view]();
   window.scrollTo(0,0);
 }
 
@@ -588,6 +607,7 @@ function renderHome(){
       <button class="btn blue" id="add">Додати слова</button>
       <button class="btn ghost" id="list">Мої слова (${ws.length})</button>
       ${store.lang==='it-IT'?'<button class="btn ghost" id="conj">Дієвідмінювання</button>':''}
+      ${('speechSynthesis' in window)?'<button class="btn ghost" id="voice">Голос озвучки</button>':''}
       <button class="btn ghost" id="sync">${loggedIn()?'☁ Синхронізація увімкнена':'☁ Синхронізація між пристроями'}</button>
       ${loggedIn()?`<p class="hint" id="cstat">${esc(statusText())}</p>`:''}
     </div>
@@ -600,7 +620,37 @@ function renderHome(){
   $('#add').onclick=()=>go('import');
   $('#list').onclick=()=>{confirmClear=false;go('list');};
   const cj=$('#conj');if(cj)cj.onclick=()=>go('conjsetup');
+  const vb=$('#voice');if(vb)vb.onclick=()=>go('voice');
   $('#sync').onclick=()=>go('sync');
+}
+
+function renderVoice(){
+  let list=[];
+  try{list=speechSynthesis.getVoices().filter(v=>v.lang&&v.lang.toLowerCase().slice(0,2)===short());}catch(e){}
+  const current=store.voice&&store.voice[store.lang];
+  app.innerHTML=`
+  <div class="top"><button class="icon" id="back" aria-label="Назад">←</button><div style="flex:1;font-weight:900;font-size:20px">Голос озвучки · ${esc(langInfo().name)}</div></div>
+  <main class="pad">
+    <p class="note">Голоси беруться з вашого пристрою чи браузера, тому список відрізняється на телефоні й комп'ютері — налаштуйте тут на кожному окремо. Натисніть на назву, щоб прослухати, і оберіть ту, що сподобається.</p>
+    ${!list.length?`<p class="hint">Голосів для «${esc(langInfo().name)}» поки не знайдено. Якщо сторінку щойно відкрито, браузер іноді вантажить список голосів із затримкою — натисніть «Оновити».</p><button class="btn ghost" id="reload">Оновити список</button>`
+    :`<div class="list">${list.map(v=>`
+      <div class="row">
+        <label style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;cursor:pointer">
+          <input type="radio" name="voice" value="${esc(v.name)}" ${v.name===current?'checked':''} style="width:22px;height:22px;flex:none;accent-color:var(--green)">
+          <span style="flex:1;min-width:0;overflow-wrap:anywhere">${esc(v.name)}<small style="display:block;color:var(--muted);font-weight:600">${esc(v.lang)}${v.localService?'':' · потрібен інтернет'}</small></span>
+        </label>
+        <button class="spk" data-v="${esc(v.name)}" aria-label="Прослухати">${ICON_SPK}</button>
+      </div>`).join('')}</div>
+      ${current?`<button class="btn ghost" id="reset">Повернути голос за замовчуванням</button>`:''}`}
+  </main>`;
+  $('#back').onclick=()=>go('home');
+  const rl=$('#reload');if(rl)rl.onclick=()=>renderVoice();
+  const rs=$('#reset');if(rs)rs.onclick=()=>{if(store.voice)delete store.voice[store.lang];save();renderVoice();};
+  $$('input[name="voice"]').forEach(r=>r.onchange=()=>{
+    if(!store.voice)store.voice={};store.voice[store.lang]=r.value;save();
+    sayVoiceSample(r.value);
+  });
+  $$('[data-v]').forEach(b=>b.onclick=()=>sayVoiceSample(b.dataset.v));
 }
 
 function renderImport(){
@@ -858,7 +908,8 @@ function renderLesson(){
   const cls=L.stage==='result'?(L.res.kind==='ok'?'ok':'bad'):'';
   app.innerHTML=`
   <div class="top"><button class="icon" id="quit" aria-label="Вийти з уроку">✕</button>
-    <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div></div>
+    <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div>
+    ${L.stage==='ask'?`<button class="icon" id="idk" aria-label="Не знаю — показати відповідь">${ICON_IDK}</button>`:''}</div>
   <main class="body">
     <h1 class="ask">${conj?(sp?'Скажіть':'Напишіть')+' форму дієслова':(sp?'Скажіть':'Напишіть')+' '+lang.adv}</h1>
     ${item.kicker?`<div class="kicker">${esc(item.kicker)}</div>`:''}
@@ -868,6 +919,7 @@ function renderLesson(){
   <footer class="dock ${cls}">${dock}</footer>`;
   const dk=$('.dock');if(dk)app.style.paddingBottom=dk.offsetHeight+'px';
   $('#quit').onclick=()=>{go('home');};
+  const idk=$('#idk');if(idk)idk.onclick=()=>{if(sp)stopListen();finishAnswer({kind:'bad',skipped:true});};
   if(L.stage==='ask'){
     if(sp){
       $('#mic').onclick=toggleMic;
@@ -987,12 +1039,18 @@ function toggleMic(){
 /* ---------- on-screen keyboard: lift the bottom button above it ---------- */
 (function(){
   const vv=window.visualViewport;if(!vv)return;
+  // iOS (Safari and third-party keyboards, e.g. extra language/predictive toolbars) sometimes
+  // reports the keyboard a bit shorter than what's actually on screen. This constant adds a
+  // safety margin on iOS only, so the button clears any such toolbar. Raise it if it's still low.
+  const IOS=/iP(hone|od|ad)/.test(navigator.platform)||(navigator.userAgent.includes('Mac')&&navigator.maxTouchPoints>1);
+  const IOS_KB_EXTRA=44;
   let raf=0;
   const upd=()=>{
     cancelAnimationFrame(raf);
     raf=requestAnimationFrame(()=>{
-      const kb=vv.scale>1.01?0:Math.max(0,Math.round(window.innerHeight-vv.height-vv.offsetTop));
-      const open=kb>80;
+      const raw=vv.scale>1.01?0:Math.max(0,Math.round(window.innerHeight-vv.height-vv.offsetTop));
+      const open=raw>80;
+      const kb=open&&IOS?raw+IOS_KB_EXTRA:raw;
       document.documentElement.style.setProperty('--kb',(open?kb:0)+'px');
       document.documentElement.classList.toggle('kb',open);
       if(view==='lesson'){const dk=$('.dock');if(dk)app.style.paddingBottom=dk.offsetHeight+'px';}
@@ -1013,6 +1071,7 @@ document.addEventListener('keydown',e=>{
 });
 
 document.addEventListener('visibilitychange',()=>{if(loggedIn())syncNow();});
+if('speechSynthesis' in window){try{speechSynthesis.addEventListener('voiceschanged',()=>{if(view==='voice')renderVoice();});speechSynthesis.getVoices();}catch(e){}}
 applyTheme();
 render();
 if(loggedIn())syncNow();
