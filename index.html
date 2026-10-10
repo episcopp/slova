@@ -236,29 +236,141 @@ function toast(msg){
   document.body.appendChild(t);clearTimeout(toastT);toastT=setTimeout(()=>t.remove(),4200);
 }
 const VOICE_SAMPLE={it:'Ciao, come stai? Questa è la mia voce.',en:'Hello, how are you? This is my voice.',fr:'Bonjour, comment ça va ? Voici ma voix.',de:'Hallo, wie geht es dir? Das ist meine Stimme.',es:'Hola, ¿cómo estás? Esta es mi voz.',pt:'Olá, como está? Esta é a minha voz.',pl:'Cześć, jak się masz? To jest mój głos.'};
+
+/* ElevenLabs is an optional, higher-quality cloud voice. The API key never leaves this
+   device: it lives only in this browser's localStorage, outside the synced word store,
+   so it is never written to Firestore or sent anywhere except api.elevenlabs.io. */
+const ELEVEN_KEY_LS='slova_eleven_key';
+function elevenKey(){try{return localStorage.getItem(ELEVEN_KEY_LS)||'';}catch(e){return '';}}
+function setElevenKey(k){try{k?localStorage.setItem(ELEVEN_KEY_LS,k):localStorage.removeItem(ELEVEN_KEY_LS);}catch(e){}}
+function voiceFor(lang){
+  const v=store.voice&&store.voice[lang||store.lang];
+  if(!v)return null;
+  return typeof v==='string'?{provider:'browser',name:v}:v;
+}
 function pickVoice(lang){
-  try{
-    const name=store.voice&&store.voice[lang||store.lang];if(!name)return null;
-    return speechSynthesis.getVoices().find(v=>v.name===name)||null;
-  }catch(e){return null;}
+  const v=voiceFor(lang);
+  if(!v||v.provider!=='browser')return null;
+  try{return speechSynthesis.getVoices().find(x=>x.name===v.name)||null;}catch(e){return null;}
 }
+function sayBrowser(text,voiceName){
+  try{
+    speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(text);u.lang=store.lang;u.rate=.9;
+    const vv=voiceName?speechSynthesis.getVoices().find(x=>x.name===voiceName):pickVoice();
+    if(vv)u.voice=vv;
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+let curAudio=null;const elevenCache=new Map();
+async function sayEleven(text,voiceId){
+  const key=elevenKey();
+  if(!key||!voiceId)return sayBrowser(text);
+  try{
+    if(curAudio){curAudio.pause();curAudio=null;}
+    const ck=voiceId+'|'+text;
+    let url=elevenCache.get(ck);
+    if(!url){
+      const r=await fetch('https://api.elevenlabs.io/v1/text-to-speech/'+encodeURIComponent(voiceId),{
+        method:'POST',
+        headers:{'xi-api-key':key,'Content-Type':'application/json','Accept':'audio/mpeg'},
+        body:JSON.stringify({text,model_id:'eleven_multilingual_v2'})
+      });
+      if(!r.ok){
+        let msg='Не вдалося озвучити через ElevenLabs.';
+        if(r.status===401)msg='Невірний ключ ElevenLabs.';
+        else if(r.status===429)msg='Вичерпано ліміт ElevenLabs на цей місяць.';
+        toast(msg+' Поки що озвучую голосом браузера.');
+        return sayBrowser(text);
+      }
+      const blob=await r.blob();url=URL.createObjectURL(blob);elevenCache.set(ck,url);
+    }
+    curAudio=new Audio(url);curAudio.play().catch(()=>{});
+  }catch(e){
+    toast('Немає зв’язку з ElevenLabs. Поки що озвучую голосом браузера.');
+    sayBrowser(text);
+  }
+}
+async function fetchElevenVoices(key){
+  const r=await fetch('https://api.elevenlabs.io/v1/voices',{headers:{'xi-api-key':key}});
+  if(!r.ok){
+    const e=new Error('http');e.code=r.status===401?'bad-key':'other';throw e;
+  }
+  const j=await r.json();
+  return(j.voices||[]).map(v=>({voice_id:v.voice_id,name:v.name,category:v.category}));
+}
+
+/* Microsoft Azure AI Speech: a free tier (F0) gives ~500,000 neural-voice characters a
+   month, and the voices are natural, not robotic. Needs an Azure account (card for
+   verification, but F0 itself is free) plus a Speech resource's key + region. The key
+   and region, like the ElevenLabs key, live only in this browser's localStorage — never
+   synced to Firestore or sent anywhere but *.cognitiveservices.azure.com / *.tts.speech.microsoft.com. */
+const AZURE_KEY_LS='slova_azure_key',AZURE_REGION_LS='slova_azure_region';
+function azureCreds(){try{return{key:localStorage.getItem(AZURE_KEY_LS)||'',region:localStorage.getItem(AZURE_REGION_LS)||''};}catch(e){return{key:'',region:''};}}
+function setAzureCreds(key,region){try{
+  if(key)localStorage.setItem(AZURE_KEY_LS,key);else localStorage.removeItem(AZURE_KEY_LS);
+  if(region)localStorage.setItem(AZURE_REGION_LS,region);else localStorage.removeItem(AZURE_REGION_LS);
+}catch(e){}}
+let azureToken='',azureTokenExp=0;
+async function azureGetToken(key,region){
+  if(azureToken&&Date.now()<azureTokenExp)return azureToken;
+  const r=await fetch(`https://${region}.api.cognitive.microsoft.com/sts/v1.0/issueToken`,{method:'POST',headers:{'Ocp-Apim-Subscription-Key':key}});
+  if(!r.ok){const e=new Error('http');e.code=(r.status===401||r.status===403)?'bad-key':'other';throw e;}
+  azureToken=await r.text();azureTokenExp=Date.now()+9*60*1000;
+  return azureToken;
+}
+async function fetchAzureVoices(key,region){
+  const r=await fetch(`https://${region}.tts.speech.microsoft.com/cognitiveservices/voices/list`,{headers:{'Ocp-Apim-Subscription-Key':key}});
+  if(!r.ok){const e=new Error('http');e.code=(r.status===401||r.status===403)?'bad-key':'other';throw e;}
+  const j=await r.json();
+  return j.filter(v=>v.Locale&&v.Locale.toLowerCase().startsWith(short())&&v.VoiceType==='Neural')
+    .map(v=>({shortName:v.ShortName,name:v.LocalName||v.DisplayName,gender:v.Gender}));
+}
+async function sayAzure(text,voiceName){
+  const{key,region}=azureCreds();
+  if(!key||!region||!voiceName)return sayBrowser(text);
+  try{
+    if(curAudio){curAudio.pause();curAudio=null;}
+    const ck='azure|'+voiceName+'|'+text;
+    let url=elevenCache.get(ck);
+    if(!url){
+      const token=await azureGetToken(key,region);
+      const langTag=voiceName.split('-').slice(0,2).join('-');
+      const safe=String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const ssml=`<speak version='1.0' xml:lang='${langTag}'><voice xml:lang='${langTag}' name='${voiceName}'>${safe}</voice></speak>`;
+      const r=await fetch(`https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`,{
+        method:'POST',
+        headers:{'Authorization':'Bearer '+token,'Content-Type':'application/ssml+xml','X-Microsoft-OutputFormat':'audio-16khz-128kbitrate-mono-mp3'},
+        body:ssml
+      });
+      if(!r.ok){
+        let msg='Не вдалося озвучити через Azure.';
+        if(r.status===401||r.status===403)msg='Невірний ключ або регіон Azure.';
+        else if(r.status===429)msg='Вичерпано безкоштовний ліміт Azure на цей місяць.';
+        toast(msg+' Поки що озвучую голосом браузера.');
+        return sayBrowser(text);
+      }
+      const blob=await r.blob();url=URL.createObjectURL(blob);elevenCache.set(ck,url);
+    }
+    curAudio=new Audio(url);curAudio.play().catch(()=>{});
+  }catch(e){
+    toast('Немає зв’язку з Azure. Поки що озвучую голосом браузера.');
+    sayBrowser(text);
+  }
+}
+
 function say(text){
-  try{
-    const clean=String(text).split('/')[0].replace(/\([^)]*\)/g,'').trim();
-    speechSynthesis.cancel();
-    const u=new SpeechSynthesisUtterance(clean);u.lang=store.lang;u.rate=.9;
-    const v=pickVoice();if(v)u.voice=v;
-    speechSynthesis.speak(u);
-  }catch(e){}
+  const clean=String(text).split('/')[0].replace(/\([^)]*\)/g,'').trim();
+  const v=voiceFor();
+  if(v&&v.provider==='eleven')sayEleven(clean,v.voiceId);
+  else if(v&&v.provider==='azure')sayAzure(clean,v.voiceName);
+  else sayBrowser(clean,v&&v.name);
 }
-function sayVoiceSample(name,lang){
-  try{
-    speechSynthesis.cancel();
-    const v=speechSynthesis.getVoices().find(x=>x.name===name);
-    const u=new SpeechSynthesisUtterance(VOICE_SAMPLE[short()]||'Ciao, come stai?');
-    u.lang=(v&&v.lang)||lang||store.lang;if(v)u.voice=v;u.rate=.9;
-    speechSynthesis.speak(u);
-  }catch(e){}
+function sayVoiceSample(v){
+  const text=VOICE_SAMPLE[short()]||'Ciao, come stai?';
+  if(v.provider==='eleven')sayEleven(text,v.voiceId);
+  else if(v.provider==='azure')sayAzure(text,v.voiceName);
+  else sayBrowser(text,v.name);
 }
 
 /* ---------- answer matching ---------- */
@@ -568,7 +680,7 @@ function renderSync(){
 }
 
 /* ---------- views ---------- */
-let view='home',L=null,importFlip=false,confirmClear=false;
+let view='home',L=null,importFlip=false,confirmClear=false,voiceTab=null,elevenList=null,elevenErr='',azureList=null,azureErr='';
 function go(v){view=v;render();}
 function render(){
   stopListen();
@@ -620,37 +732,148 @@ function renderHome(){
   $('#add').onclick=()=>go('import');
   $('#list').onclick=()=>{confirmClear=false;go('list');};
   const cj=$('#conj');if(cj)cj.onclick=()=>go('conjsetup');
-  const vb=$('#voice');if(vb)vb.onclick=()=>go('voice');
+  const vb=$('#voice');if(vb)vb.onclick=()=>{voiceTab=null;elevenErr='';azureErr='';go('voice');};
   $('#sync').onclick=()=>go('sync');
 }
 
 function renderVoice(){
-  let list=[];
-  try{list=speechSynthesis.getVoices().filter(v=>v.lang&&v.lang.toLowerCase().slice(0,2)===short());}catch(e){}
-  const current=store.voice&&store.voice[store.lang];
+  const current=voiceFor();
+  if(!voiceTab)voiceTab=(current&&current.provider)||'browser';
+  let body='';
+  if(voiceTab==='browser'){
+    let list=[];
+    try{list=speechSynthesis.getVoices().filter(v=>v.lang&&v.lang.toLowerCase().slice(0,2)===short());}catch(e){}
+    const curName=current&&current.provider==='browser'?current.name:null;
+    body=!list.length
+      ?`<p class="hint">Голосів для «${esc(langInfo().name)}» поки не знайдено. Якщо сторінку щойно відкрито, браузер іноді вантажить список голосів із затримкою — натисніть «Оновити». На комп'ютері спробуйте також відкрити сайт у Microsoft Edge: у нього є безкоштовні живі онлайн-голоси для багатьох мов.</p><button class="btn ghost" id="reload">Оновити список</button>`
+      :`<p class="note">На iPhone: Налаштування → Спеціальні можливості → Вміст, що озвучується → Голоси → ваша мова → завантажте голос «Enhanced»/«Premium» — він звучить набагато живіше за звичайний і з'явиться в списку нижче. На комп'ютері спробуйте відкрити сайт у Microsoft Edge: там є безкоштовні онлайн-голоси, яких немає в Chrome.</p>
+      <div class="list">${list.map(v=>`
+        <div class="row">
+          <label style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;cursor:pointer">
+            <input type="radio" name="voice" value="${esc(v.name)}" ${v.name===curName?'checked':''} style="width:22px;height:22px;flex:none;accent-color:var(--green)">
+            <span style="flex:1;min-width:0;overflow-wrap:anywhere">${esc(v.name)}<small style="display:block;color:var(--muted);font-weight:600">${esc(v.lang)}${v.localService?'':' · потрібен інтернет'}</small></span>
+          </label>
+          <button class="spk" data-bv="${esc(v.name)}" aria-label="Прослухати">${ICON_SPK}</button>
+        </div>`).join('')}</div>`;
+  }else if(voiceTab==='azure'){
+    const{key,region}=azureCreds();
+    if(!key||!region){
+      body=`<p class="note">Microsoft Azure — безкоштовно до 500 000 символів на місяць, голоси живі, не «роботизовані». Потрібен акаунт Azure (на верифікацію просять картку, але сам безкоштовний рівень не тарифікується):</p>
+      <ol class="note" style="padding-left:20px;margin:0 0 4px">
+        <li>Зареєструйтесь на <a href="https://portal.azure.com" target="_blank" rel="noopener">portal.azure.com</a>.</li>
+        <li>Створіть ресурс «Speech service» (пошук «Speech» у Create a resource), тариф <b>Free F0</b>.</li>
+        <li>Відкрийте ресурс → «Keys and Endpoint» — там Key 1 і Region.</li>
+      </ol>
+      <section><label class="lbl" for="azk">Ключ (Key 1)</label><input id="azk" class="input" autocomplete="off" spellcheck="false" placeholder="32 символи"></section>
+      <section><label class="lbl" for="azr">Регіон</label><input id="azr" class="input" autocomplete="off" spellcheck="false" placeholder="наприклад westeurope"></section>
+      <p class="note">Зберігаються лише в цьому браузері на цьому пристрої — у хмару зі словами не потрапляють.</p>
+      <p class="note warn" id="azerr">${esc(azureErr)}</p>
+      <button class="btn green" id="azsave">Зберегти й завантажити голоси</button>`;
+    }else if(azureList===null){
+      body=`<p class="note">Завантажую голоси…</p>`;
+    }else if(azureErr){
+      body=`<p class="note warn">${esc(azureErr)}</p><button class="btn ghost" id="azout">Змінити ключ і регіон</button>`;
+    }else if(!azureList.length){
+      body=`<p class="hint">Для «${esc(langInfo().name)}» у вашому регіоні Azure не знайшлося живих (Neural) голосів.</p><button class="btn ghost" id="azout">Змінити ключ і регіон</button>`;
+    }else{
+      const curName=current&&current.provider==='azure'?current.voiceName:null;
+      body=`<div class="list">${azureList.map(v=>`
+        <div class="row">
+          <label style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;cursor:pointer">
+            <input type="radio" name="voice" value="${esc(v.shortName)}" ${v.shortName===curName?'checked':''} style="width:22px;height:22px;flex:none;accent-color:var(--green)">
+            <span style="flex:1;min-width:0;overflow-wrap:anywhere">${esc(v.name)}<small style="display:block;color:var(--muted);font-weight:600">${v.gender==='Female'?'жіночий':'чоловічий'}</small></span>
+          </label>
+          <button class="spk" data-av="${esc(v.shortName)}" aria-label="Прослухати">${ICON_SPK}</button>
+        </div>`).join('')}</div>
+      <button class="btn ghost" id="azout">Змінити ключ і регіон</button>`;
+    }
+  }else{
+    const key=elevenKey();
+    if(!key){
+      body=`<p class="note">ElevenLabs — платний сервіс озвучки зі значно живішими голосами. У них є безкоштовний пробний ліміт символів на місяць (приблизно кілька тисяч), а далі — від 1$ на місяць. Акаунт і ключ API створюються на <a href="https://elevenlabs.io" target="_blank" rel="noopener">elevenlabs.io</a> → профіль → API Keys.</p>
+      <section><label class="lbl" for="ek">Ключ API</label><input id="ek" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="sk_…"></section>
+      <p class="note">Ключ зберігається лише в цьому браузері на цьому пристрої — у хмару зі словами він не потрапляє, вводьте його на кожному пристрої окремо.</p>
+      <p class="note warn" id="everr">${esc(elevenErr)}</p>
+      <button class="btn green" id="esave">Зберегти й завантажити голоси</button>`;
+    }else if(elevenList===null){
+      body=`<p class="note">Завантажую голоси…</p>`;
+    }else if(elevenErr){
+      body=`<p class="note warn">${esc(elevenErr)}</p><button class="btn ghost" id="ekout">Змінити ключ</button>`;
+    }else{
+      const curId=current&&current.provider==='eleven'?current.voiceId:null;
+      body=`<p class="note">Голос мультимовний: добре звучить і українською, і цільовою мовою. Натисніть ▶, щоб прослухати фразу цільовою мовою.</p>
+      <div class="list">${elevenList.map(v=>`
+        <div class="row">
+          <label style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;cursor:pointer">
+            <input type="radio" name="voice" value="${esc(v.voice_id)}" ${v.voice_id===curId?'checked':''} style="width:22px;height:22px;flex:none;accent-color:var(--green)">
+            <span style="flex:1;min-width:0;overflow-wrap:anywhere">${esc(v.name)}${v.category?`<small style="display:block;color:var(--muted);font-weight:600">${esc(v.category)}</small>`:''}</span>
+          </label>
+          <button class="spk" data-ev="${esc(v.voice_id)}" data-en="${esc(v.name)}" aria-label="Прослухати">${ICON_SPK}</button>
+        </div>`).join('')}</div>
+      <button class="btn ghost" id="ekout">Змінити ключ ElevenLabs</button>`;
+    }
+  }
   app.innerHTML=`
   <div class="top"><button class="icon" id="back" aria-label="Назад">←</button><div style="flex:1;font-weight:900;font-size:20px">Голос озвучки · ${esc(langInfo().name)}</div></div>
   <main class="pad">
-    <p class="note">Голоси беруться з вашого пристрою чи браузера, тому список відрізняється на телефоні й комп'ютері — налаштуйте тут на кожному окремо. Натисніть на назву, щоб прослухати, і оберіть ту, що сподобається.</p>
-    ${!list.length?`<p class="hint">Голосів для «${esc(langInfo().name)}» поки не знайдено. Якщо сторінку щойно відкрито, браузер іноді вантажить список голосів із затримкою — натисніть «Оновити».</p><button class="btn ghost" id="reload">Оновити список</button>`
-    :`<div class="list">${list.map(v=>`
-      <div class="row">
-        <label style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;cursor:pointer">
-          <input type="radio" name="voice" value="${esc(v.name)}" ${v.name===current?'checked':''} style="width:22px;height:22px;flex:none;accent-color:var(--green)">
-          <span style="flex:1;min-width:0;overflow-wrap:anywhere">${esc(v.name)}<small style="display:block;color:var(--muted);font-weight:600">${esc(v.lang)}${v.localService?'':' · потрібен інтернет'}</small></span>
-        </label>
-        <button class="spk" data-v="${esc(v.name)}" aria-label="Прослухати">${ICON_SPK}</button>
-      </div>`).join('')}</div>
-      ${current?`<button class="btn ghost" id="reset">Повернути голос за замовчуванням</button>`:''}`}
+    <section><div class="lbl">Джерело голосу</div><div class="seg" style="grid-template-columns:1fr 1fr 1fr">
+      <button data-tab="browser" aria-pressed="${voiceTab==='browser'}">Браузер</button>
+      <button data-tab="azure" aria-pressed="${voiceTab==='azure'}">Azure</button>
+      <button data-tab="eleven" aria-pressed="${voiceTab==='eleven'}">ElevenLabs</button>
+    </div></section>
+    ${body}
+    ${current?`<button class="btn ghost" id="reset">Повернути голос за замовчуванням</button>`:''}
   </main>`;
   $('#back').onclick=()=>go('home');
+  $$('[data-tab]').forEach(b=>b.onclick=()=>{voiceTab=b.dataset.tab;elevenErr='';azureErr='';renderVoice();});
   const rl=$('#reload');if(rl)rl.onclick=()=>renderVoice();
   const rs=$('#reset');if(rs)rs.onclick=()=>{if(store.voice)delete store.voice[store.lang];save();renderVoice();};
-  $$('input[name="voice"]').forEach(r=>r.onchange=()=>{
-    if(!store.voice)store.voice={};store.voice[store.lang]=r.value;save();
-    sayVoiceSample(r.value);
+  $$('input[name="voice"][value]').forEach(r=>{
+    if(voiceTab==='browser')r.onchange=()=>{
+      if(!store.voice)store.voice={};store.voice[store.lang]={provider:'browser',name:r.value};save();
+      sayVoiceSample({provider:'browser',name:r.value});
+    };
+    else if(voiceTab==='azure')r.onchange=()=>{
+      if(!store.voice)store.voice={};store.voice[store.lang]={provider:'azure',voiceName:r.value};save();
+      sayVoiceSample({provider:'azure',voiceName:r.value});
+    };
+    else if(voiceTab==='eleven')r.onchange=()=>{
+      if(!store.voice)store.voice={};store.voice[store.lang]={provider:'eleven',voiceId:r.value};save();
+      sayVoiceSample({provider:'eleven',voiceId:r.value});
+    };
   });
-  $$('[data-v]').forEach(b=>b.onclick=()=>sayVoiceSample(b.dataset.v));
+  $$('[data-bv]').forEach(b=>b.onclick=()=>sayVoiceSample({provider:'browser',name:b.dataset.bv}));
+  $$('[data-av]').forEach(b=>b.onclick=()=>sayVoiceSample({provider:'azure',voiceName:b.dataset.av}));
+  $$('[data-ev]').forEach(b=>b.onclick=()=>sayVoiceSample({provider:'eleven',voiceId:b.dataset.ev}));
+  const es=$('#esave');if(es)es.onclick=async()=>{
+    const k=($('#ek').value||'').trim();
+    if(!k){elevenErr='Введіть ключ API.';renderVoice();return;}
+    setElevenKey(k);elevenList=null;elevenErr='';renderVoice();
+    try{elevenList=await fetchElevenVoices(k);}
+    catch(e){elevenErr=e.code==='bad-key'?'Невірний ключ API.':'Не вдалося завантажити голоси. Перевірте інтернет і спробуйте ще раз.';setElevenKey('');elevenList=null;}
+    renderVoice();
+  };
+  const eo=$('#ekout');if(eo)eo.onclick=()=>{setElevenKey('');elevenList=null;elevenErr='';renderVoice();};
+  if(voiceTab==='eleven'&&elevenKey()&&elevenList===null&&!elevenErr){
+    fetchElevenVoices(elevenKey()).then(l=>{elevenList=l;renderVoice();})
+      .catch(e=>{elevenErr=e.code==='bad-key'?'Невірний ключ API.':'Не вдалося завантажити голоси. Перевірте інтернет і спробуйте ще раз.';renderVoice();});
+  }
+  const azs=$('#azsave');if(azs)azs.onclick=async()=>{
+    const k=($('#azk').value||'').trim(),rg=($('#azr').value||'').trim().toLowerCase().replace(/\s+/g,'');
+    if(!k||!rg){azureErr='Введіть і ключ, і регіон.';renderVoice();return;}
+    setAzureCreds(k,rg);azureList=null;azureErr='';renderVoice();
+    try{azureList=await fetchAzureVoices(k,rg);}
+    catch(e){azureErr=e.code==='bad-key'?'Невірний ключ або регіон.':'Не вдалося завантажити голоси. Перевірте інтернет і спробуйте ще раз.';setAzureCreds('','');azureList=null;}
+    renderVoice();
+  };
+  const azo=$('#azout');if(azo)azo.onclick=()=>{setAzureCreds('',''); azureList=null;azureErr='';renderVoice();};
+  if(voiceTab==='azure'){
+    const{key,region}=azureCreds();
+    if(key&&region&&azureList===null&&!azureErr){
+      fetchAzureVoices(key,region).then(l=>{azureList=l;renderVoice();})
+        .catch(e=>{azureErr=e.code==='bad-key'?'Невірний ключ або регіон.':'Не вдалося завантажити голоси. Перевірте інтернет і спробуйте ще раз.';renderVoice();});
+    }
+  }
 }
 
 function renderImport(){
@@ -1006,6 +1229,7 @@ function toggleMic(){
   if(listening){try{rec.stop();}catch(e){}return;}
   if(!SR)return;
   try{speechSynthesis.cancel();}catch(e){}
+  if(curAudio){try{curAudio.pause();}catch(e){}curAudio=null;}
   rec=new SR();rec.lang=store.lang;rec.interimResults=true;rec.maxAlternatives=5;rec.continuous=false;
   gotFinal=false;
   rec.onstart=()=>{listening=true;setMic(true);setLive('…','Слухаю…');};
