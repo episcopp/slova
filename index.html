@@ -698,7 +698,8 @@ function renderSync(){
    On iPhone, Web Push only works once the site is added to the Home Screen and opened from
    there (iOS 16.4+) — Safari itself (as a normal browser tab) cannot receive push at all. */
 const PUSH_VAPID_LS='slova_vapid';
-function vapidKey(){try{return localStorage.getItem(PUSH_VAPID_LS)||cloud.vapidKey||'';}catch(e){return cloud.vapidKey||'';}}
+const BUILT_IN_VAPID='';
+function vapidKey(){if(BUILT_IN_VAPID)return BUILT_IN_VAPID;try{return localStorage.getItem(PUSH_VAPID_LS)||cloud.vapidKey||'';}catch(e){return cloud.vapidKey||'';}}
 function setVapidKey(k){cloud.vapidKey=k||'';saveCloud();}
 function isStandalone(){
   try{return window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;}catch(e){return false;}
