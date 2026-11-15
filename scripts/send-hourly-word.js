@@ -39,7 +39,7 @@ async function run(db, siteBase) {
 
     let parsed = {};
     try { parsed = JSON.parse(d.data || '{}'); } catch (e) { skipped++; continue; }
-    if (!inActiveHours(d.pushTz)) { skipped++; continue; }
+    if (process.env.FORCE_SEND !== 'true' && !inActiveHours(d.pushTz)) { skipped++; continue; }
     const lang = d.pushLang || 'it-IT';
     const list = (parsed.words && parsed.words[lang]) || [];
     if (!list.length) { skipped++; continue; }
