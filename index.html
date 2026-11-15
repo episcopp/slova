@@ -169,7 +169,7 @@ const ART={
 const ACC={it:'àèéìòù',fr:'àâçéèêëîïôùûü',es:'áéíóúñü',de:'äöüß',pl:'ąćęłńóśźż',pt:'áàâãçéêíóôõú'};
 const KEY='slova_trainer_v1';
 // Оновлюється при кожному залитті на GitHub: версія і дата/час (за Римом).
-const APP_VERSION='1.5',APP_UPDATED='15.11.2026 23:20';
+const APP_VERSION='1.6',APP_UPDATED='15.11.2026 23:27';
 const ROUND=10;
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 
@@ -563,7 +563,7 @@ function initFirebase(){
       await loadScript(FB_BASE+'firebase-firestore-compat.js');
     }
     const c=cfg();
-    if(!window.firebase.apps.length)window.firebase.initializeApp({apiKey:c.apiKey,projectId:c.projectId,authDomain:c.projectId+'.firebaseapp.com'});
+    if(!window.firebase.apps.length)window.firebase.initializeApp({apiKey:c.apiKey,projectId:c.projectId,authDomain:c.projectId+'.firebaseapp.com',messagingSenderId:c.messagingSenderId,appId:c.appId});
     return window.firebase;
   })().catch(e=>{fbReady=null;throw e;});
   return fbReady;
