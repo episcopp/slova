@@ -169,7 +169,7 @@ const ART={
 const ACC={it:'àèéìòù',fr:'àâçéèêëîïôùûü',es:'áéíóúñü',de:'äöüß',pl:'ąćęłńóśźż',pt:'áàâãçéêíóôõú'};
 const KEY='slova_trainer_v1';
 // Оновлюється при кожному залитті на GitHub: версія і дата/час (за Римом).
-const APP_VERSION='1.8',APP_UPDATED='15.11.2026 23:50';
+const APP_VERSION='1.9',APP_UPDATED='16.11.2026 00:05';
 const ROUND=10;
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 
@@ -753,7 +753,7 @@ async function enablePush(vkey){
     if(!u){const e=new Error('nosession');e.code='nosession';throw e;}
     step='save-token-firestore';
     await window.firebase.firestore().collection('users').doc(u.uid).set({pushToken:token,pushLang:store.lang,pushTz:(Intl.DateTimeFormat().resolvedOptions().timeZone||'')},{merge:true});
-    cloud.pushOn=true;cloud.pushLang=store.lang;saveCloud();
+    cloud.pushOn=true;cloud.pushLang=store.lang;cloud.pushToken=token;saveCloud();
   }catch(e){
     e.step=step;logErr(step,e);throw e;
   }
@@ -1571,17 +1571,27 @@ setTimeout(checkUpdate,800);
 /* If this device already has push enabled and the app happens to be open (foreground) when a
    reminder arrives, show the same single-word screen immediately instead of relying on a tap. */
 if(cloud.pushOn&&pushSupported()&&isStandalone()){
+  const openQuick=d=>{
+    if(!d||!d.uk||!d.tl)return;
+    Q={uk:d.uk,tl:d.tl,lang:d.lang||store.lang,wid:d.wid||'',stage:'ask',res:null};
+    go('quick');
+  };
+  // The service worker tells the open app which word to show (on notification tap, or when a push arrives while the app is on screen).
+  navigator.serviceWorker.addEventListener('message',e=>{if(e.data&&e.data.type==='quick')openQuick(e.data);});
+  // Keep the worker fresh and the device token current (iOS can rotate it); save it again if it changed.
   (async()=>{
     try{
+      const reg=await registerPushSW();try{await reg.update();}catch(e){}
+      if(!loggedIn())return;
       if(!window.firebase||!window.firebase.messaging)await loadScript(FB_BASE+'firebase-messaging-compat.js');
       await initFirebase();
-      window.firebase.messaging().onMessage(payload=>{
-        const d=(payload&&payload.data)||{};
-        if(!d.uk||!d.tl)return;
-        Q={uk:d.uk,tl:d.tl,lang:d.lang||store.lang,wid:d.wid||'',stage:'ask',res:null};
-        go('quick');
-      });
-    }catch(e){}
+      const token=await window.firebase.messaging().getToken({vapidKey:vapidKey(),serviceWorkerRegistration:reg});
+      const u=await currentUser();
+      if(token&&u&&token!==cloud.pushToken){
+        await window.firebase.firestore().collection('users').doc(u.uid).set({pushToken:token,pushLang:store.lang,pushTz:(Intl.DateTimeFormat().resolvedOptions().timeZone||'')},{merge:true});
+        cloud.pushToken=token;saveCloud();
+      }
+    }catch(e){logErr('refresh-push',e);}
   })();
 }
 

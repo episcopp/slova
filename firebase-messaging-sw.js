@@ -1,51 +1,52 @@
-/* Background service worker for push notifications (Firebase Cloud Messaging, Web Push).
-   The app registers this file with its Firebase project config passed as query params
-   (see registerPushSW() in index.html), so this file itself needs no secrets baked in —
-   everything it needs comes through self.location.search at registration time. */
-importScripts('https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js');
-importScripts('https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js');
+/* Service worker for the hourly word reminder (Web Push via Firebase Cloud Messaging).
+   The server sends DATA-ONLY messages, and this worker turns every push into a visible
+   notification itself. That matters on iPhone: Safari requires each push to show a
+   notification, and otherwise drops the subscription after a few silent ones. */
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
-const params = new URLSearchParams(self.location.search);
-firebase.initializeApp({
-  apiKey: params.get('apiKey') || '',
-  projectId: params.get('projectId') || '',
-  messagingSenderId: params.get('messagingSenderId') || '',
-  appId: params.get('appId') || ''
-});
+function readPayload(event) {
+  try {
+    const j = event.data ? event.data.json() : {};
+    return j.data || j.notification || j || {};
+  } catch (e) {
+    try { return { body: event.data.text() }; } catch (e2) { return {}; }
+  }
+}
 
-const messaging = firebase.messaging();
-
-messaging.onBackgroundMessage((payload) => {
-  const data = payload.data || {};
-  const title = (payload.notification && payload.notification.title) || 'Слова';
-  const body = (payload.notification && payload.notification.body) || data.uk || '';
-  self.registration.showNotification(title, {
-    body,
-    icon: 'icon.png',
-    badge: 'icon.png',
-    tag: 'slova-word',
-    renotify: true,
-    data
-  });
+self.addEventListener('push', (event) => {
+  const d = readPayload(event);
+  const title = d.title || 'Слова';
+  const body = d.body || d.uk || 'Час повторити слово';
+  event.waitUntil((async () => {
+    await self.registration.showNotification(title, {
+      body,
+      icon: 'icon.png',
+      badge: 'icon.png',
+      data: { uk: d.uk || '', tl: d.tl || '', lang: d.lang || '', wid: d.wid || '' }
+    });
+    // If the app is open on screen, also jump straight to the one-word screen.
+    const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of list) {
+      if (c.visibilityState === 'visible') c.postMessage({ type: 'quick', uk: d.uk, tl: d.tl, lang: d.lang, wid: d.wid });
+    }
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const d = event.notification.data || {};
-  const qs = 'notif=1&uk=' + encodeURIComponent(d.uk || '') +
-    '&tl=' + encodeURIComponent(d.tl || '') +
-    '&lang=' + encodeURIComponent(d.lang || '') +
-    '&wid=' + encodeURIComponent(d.wid || '');
+  const qs = 'notif=1&uk=' + encodeURIComponent(d.uk || '') + '&tl=' + encodeURIComponent(d.tl || '') +
+    '&lang=' + encodeURIComponent(d.lang || '') + '&wid=' + encodeURIComponent(d.wid || '');
   const url = new URL('./?' + qs, self.registration.scope).href;
-  event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
-      for (const c of list) {
-        if ('focus' in c) {
-          if ('navigate' in c) c.navigate(url);
-          return c.focus();
-        }
-      }
-      return clients.openWindow(url);
-    })
-  );
+  event.waitUntil((async () => {
+    const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of list) {
+      try {
+        c.postMessage({ type: 'quick', uk: d.uk, tl: d.tl, lang: d.lang, wid: d.wid });
+        return await c.focus();
+      } catch (e) { /* try next / open a new window */ }
+    }
+    return self.clients.openWindow(url);
+  })());
 });

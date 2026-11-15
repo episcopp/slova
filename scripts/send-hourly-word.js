@@ -54,14 +54,11 @@ async function run(db, siteBase) {
       '&wid=' + encodeURIComponent(w.id || '');
     const link = siteBase + '?' + qs;
 
+    // Data-only message: the service worker builds the visible notification itself.
     const message = {
       token: d.pushToken,
-      notification: { title: 'Слова · ' + lang.slice(0, 2).toUpperCase(), body: w.uk || '' },
-      data: { uk: w.uk || '', tl: w.tl || '', lang, wid: w.id || '' },
-      webpush: {
-        fcmOptions: { link },
-        notification: { icon: siteBase + 'icon.png' }
-      }
+      data: { title: 'Слова · ' + lang.slice(0, 2).toUpperCase(), body: w.uk || '', uk: w.uk || '', tl: w.tl || '', lang, wid: w.id || '', link },
+      webpush: { headers: { Urgency: 'high', TTL: '3600' } }
     };
 
     try {
