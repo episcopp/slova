@@ -169,7 +169,7 @@ const ART={
 const ACC={it:'àèéìòù',fr:'àâçéèêëîïôùûü',es:'áéíóúñü',de:'äöüß',pl:'ąćęłńóśźż',pt:'áàâãçéêíóôõú'};
 const KEY='slova_trainer_v1';
 // Оновлюється при кожному залитті на GitHub: версія і дата/час (за Римом).
-const APP_VERSION='1.6',APP_UPDATED='15.11.2026 23:27';
+const APP_VERSION='1.7',APP_UPDATED='15.11.2026 23:40';
 const ROUND=10;
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 
@@ -1536,6 +1536,26 @@ document.addEventListener('keydown',e=>{
 document.addEventListener('visibilitychange',()=>{if(loggedIn())syncNow();});
 if('speechSynthesis' in window){try{speechSynthesis.addEventListener('voiceschanged',()=>{if(view==='voice')renderVoice();});speechSynthesis.getVoices();}catch(e){}}
 applyTheme();
+
+/* Auto-update: the installed home-screen app caches index.html hard. version.json (always
+   fetched fresh) holds the latest version; if it differs from this file's APP_VERSION we reload
+   once through a cache-busting URL. Done only on the home screen so a lesson is never cut off. */
+async function checkUpdate(){
+  try{
+    if(view!=='home')return;
+    const r=await fetch('version.json?_='+Date.now(),{cache:'no-store'});
+    if(!r.ok)return;
+    const j=await r.json();
+    if(!j||!j.v||j.v===APP_VERSION)return;
+    let tried='';try{tried=sessionStorage.getItem('slova_upd')||'';}catch(e){}
+    if(tried===j.v)return;
+    try{sessionStorage.setItem('slova_upd',j.v);}catch(e){}
+    location.replace(location.pathname+'?v='+encodeURIComponent(j.v));
+  }catch(e){}
+}
+try{const u=new URLSearchParams(location.search);if(u.has('v')&&!u.has('notif'))history.replaceState(null,'',location.pathname);}catch(e){}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')checkUpdate();});
+setTimeout(checkUpdate,800);
 
 /* If opened from a push-notification tap, jump straight into the single-word screen. */
 (function(){
