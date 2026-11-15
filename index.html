@@ -168,6 +168,8 @@ const ART={
 };
 const ACC={it:'àèéìòù',fr:'àâçéèêëîïôùûü',es:'áéíóúñü',de:'äöüß',pl:'ąćęłńóśźż',pt:'áàâãçéêíóôõú'};
 const KEY='slova_trainer_v1';
+// Оновлюється при кожному залитті на GitHub: версія і дата/час (за Римом).
+const APP_VERSION='1.4',APP_UPDATED='15.11.2026 23:05';
 const ROUND=10;
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 
@@ -834,6 +836,7 @@ function renderHome(){
       <button class="btn ghost" id="push">🔔 Нагадування${cloud.pushOn?' (увімкнено)':''}</button>
       ${loggedIn()?`<p class="hint" id="cstat">${esc(statusText())}</p>`:''}
     </div>
+    <p class="hint" style="margin-top:8px;font-size:13px">Версія ${APP_VERSION} · оновлено ${APP_UPDATED}</p>
   </main>`;
   $('#snd').onclick=()=>{store.sound=store.sound===false;save();if(store.sound)playSound('ok');render();};
   $('#theme').onclick=()=>{store.theme=isDark()?'light':'dark';save();applyTheme();render();};
