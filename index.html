@@ -169,7 +169,7 @@ const ART={
 const ACC={it:'àèéìòù',fr:'àâçéèêëîïôùûü',es:'áéíóúñü',de:'äöüß',pl:'ąćęłńóśźż',pt:'áàâãçéêíóôõú'};
 const KEY='slova_trainer_v1';
 // Оновлюється при кожному залитті на GitHub: версія і дата/час (за Римом).
-const APP_VERSION='1.7',APP_UPDATED='15.11.2026 23:40';
+const APP_VERSION='1.8',APP_UPDATED='15.11.2026 23:50';
 const ROUND=10;
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 
@@ -617,7 +617,7 @@ async function syncNow(){
     const snap=await ref.get();
     const d=snap.exists?snap.data():null;
     if(d&&d.data){let remote=null;try{remote=JSON.parse(d.data);}catch(e){}if(remote)mergeRemote(remote);}
-    await ref.set({data:JSON.stringify({words:store.words,tomb:store.tomb||{},streak:store.streak}),updatedAt:new Date().toISOString()});
+    await ref.set({data:JSON.stringify({words:store.words,tomb:store.tomb||{},streak:store.streak}),updatedAt:new Date().toISOString()},{merge:true});
     cloud.last=Date.now();cloud.err='';saveCloud();
     if(view==='home'||view==='list')render();else paintStatus(statusText());
   }catch(e){
