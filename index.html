@@ -169,7 +169,7 @@ const ART={
 const ACC={it:'àèéìòù',fr:'àâçéèêëîïôùûü',es:'áéíóúñü',de:'äöüß',pl:'ąćęłńóśźż',pt:'áàâãçéêíóôõú'};
 const KEY='slova_trainer_v1';
 // Оновлюється при кожному залитті на GitHub: версія і дата/час (за Римом).
-const APP_VERSION='1.4',APP_UPDATED='15.11.2026 23:05';
+const APP_VERSION='1.5',APP_UPDATED='15.11.2026 23:20';
 const ROUND=10;
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 
@@ -699,7 +699,22 @@ function renderSync(){
       scheduled job knows where to send the next word.
    On iPhone, Web Push only works once the site is added to the Home Screen and opened from
    there (iOS 16.4+) — Safari itself (as a normal browser tab) cannot receive push at all. */
-const PUSH_VAPID_LS='slova_vapid';
+const PUSH_VAPID_LS='slova_vapid',LOG_KEY='slova_log';
+function logErr(step,e){
+  try{
+    const a=JSON.parse(localStorage.getItem(LOG_KEY)||'[]');
+    a.push({t:new Date().toISOString(),step:step||'',code:(e&&e.code)||'',name:(e&&e.name)||'',msg:String((e&&e.message)||e||''),stack:String((e&&e.stack)||'').slice(0,500)});
+    localStorage.setItem(LOG_KEY,JSON.stringify(a.slice(-30)));
+  }catch(x){}
+}
+function readLog(){try{return JSON.parse(localStorage.getItem(LOG_KEY)||'[]');}catch(e){return [];}}
+function logText(){
+  const env=`Версія ${APP_VERSION} (${APP_UPDATED})\nstandalone=${isStandalone()} perm=${('Notification' in window)?Notification.permission:'n/a'} sw=${'serviceWorker' in navigator} push=${'PushManager' in window}\nUA: ${navigator.userAgent}`;
+  const items=readLog().map(x=>`${x.t} [${x.step}] ${x.code||x.name}: ${x.msg}${x.stack?'\n'+x.stack:''}`).join('\n\n');
+  return env+(items?'\n\n'+items:'\n\n(журнал порожній)');
+}
+window.addEventListener('error',e=>logErr('global',e.error||{message:e.message}));
+window.addEventListener('unhandledrejection',e=>logErr('promise',e.reason));
 const BUILT_IN_VAPID='BDMC4OFB_liKtVkEGhd4KRyYT5yr46HNROJ7ZH8n1q8DjFsbseZVkf493QA848XP9MCfnm0KsjZ4TWJCMXx3M0A';
 function vapidKey(){if(BUILT_IN_VAPID)return BUILT_IN_VAPID;try{return localStorage.getItem(PUSH_VAPID_LS)||cloud.vapidKey||'';}catch(e){return cloud.vapidKey||'';}}
 function setVapidKey(k){cloud.vapidKey=k||'';saveCloud();}
@@ -714,20 +729,34 @@ async function registerPushSW(){
   return navigator.serviceWorker.register('firebase-messaging-sw.js?'+qs);
 }
 async function enablePush(vkey){
-  if(!window.firebase||!window.firebase.messaging){
-    await loadScript(FB_BASE+'firebase-messaging-compat.js');
+  let step='start';
+  try{
+    step='load-messaging-sdk';
+    if(!window.firebase||!window.firebase.messaging){
+      await loadScript(FB_BASE+'firebase-messaging-compat.js');
+    }
+    step='permission';
+    const perm=await Notification.requestPermission();
+    if(perm!=='granted'){const e=new Error('denied');e.code='denied';throw e;}
+    step='register-service-worker';
+    const reg=await registerPushSW();
+    step='wait-service-worker-active';
+    await navigator.serviceWorker.ready;
+    step='init-firebase';
+    await initFirebase();
+    step='get-token';
+    const msg=window.firebase.messaging();
+    const token=await msg.getToken({vapidKey:vkey,serviceWorkerRegistration:reg});
+    if(!token){const e=new Error('notoken');e.code='notoken';throw e;}
+    step='current-user';
+    const u=await currentUser();
+    if(!u){const e=new Error('nosession');e.code='nosession';throw e;}
+    step='save-token-firestore';
+    await window.firebase.firestore().collection('users').doc(u.uid).set({pushToken:token,pushLang:store.lang,pushTz:(Intl.DateTimeFormat().resolvedOptions().timeZone||'')},{merge:true});
+    cloud.pushOn=true;cloud.pushLang=store.lang;saveCloud();
+  }catch(e){
+    e.step=step;logErr(step,e);throw e;
   }
-  const perm=await Notification.requestPermission();
-  if(perm!=='granted'){const e=new Error('denied');e.code='denied';throw e;}
-  const reg=await registerPushSW();
-  await initFirebase();
-  const msg=window.firebase.messaging();
-  const token=await msg.getToken({vapidKey:vkey,serviceWorkerRegistration:reg});
-  if(!token){const e=new Error('notoken');e.code='notoken';throw e;}
-  const u=await currentUser();
-  if(!u){const e=new Error('nosession');e.code='nosession';throw e;}
-  await window.firebase.firestore().collection('users').doc(u.uid).set({pushToken:token,pushLang:store.lang,pushTz:(Intl.DateTimeFormat().resolvedOptions().timeZone||'')},{merge:true});
-  cloud.pushOn=true;cloud.pushLang=store.lang;saveCloud();
 }
 async function disablePush(){
   try{
@@ -766,8 +795,17 @@ function renderPush(){
       <button class="btn green" id="pon">Увімкнути сповіщення</button>
       <button class="linkbtn" id="pchk">Змінити VAPID-ключ</button>`}`;
   }
-  app.innerHTML=`<div class="top"><button class="icon" id="back" aria-label="Назад">←</button><div style="flex:1;font-weight:900;font-size:20px">Нагадування</div></div><main class="pad">${body}</main>`;
+  app.innerHTML=`<div class="top"><button class="icon" id="back" aria-label="Назад">←</button><div style="flex:1;font-weight:900;font-size:20px">Нагадування</div></div><main class="pad">${body}
+    <section><div class="lbl">Журнал помилок</div>
+      <pre id="logbox" style="white-space:pre-wrap;word-break:break-all;font-size:12px;font-weight:600;border:2px solid var(--line);border-radius:12px;padding:10px;max-height:260px;overflow:auto;margin:0 0 10px">${esc(logText())}</pre>
+      <div class="seg"><button id="logcopy">Скопіювати</button><button id="logclear">Очистити</button></div></section></main>`;
   $('#back').onclick=()=>go('home');
+  $('#logcopy').onclick=async()=>{
+    const t=logText();
+    try{await navigator.clipboard.writeText(t);toast('Журнал скопійовано');}
+    catch(e){const r=document.createRange();r.selectNodeContents($('#logbox'));const sel=getSelection();sel.removeAllRanges();sel.addRange(r);toast('Виділено — скопіюйте вручну');}
+  };
+  $('#logclear').onclick=()=>{try{localStorage.removeItem(LOG_KEY);}catch(e){}renderPush();};
   const gs=$('#gosync');if(gs)gs.onclick=()=>go('sync');
   const ps=$('#psave');if(ps)ps.onclick=async()=>{
     const k=($('#vk').value||'').trim();
@@ -776,14 +814,14 @@ function renderPush(){
     try{await enablePush(k);pushErr='';}
     catch(e){
       pushErr=e.code==='denied'?'Сповіщення заблоковано. Дозвольте їх для цього сайту в налаштуваннях телефону (Safari → цей сайт → Сповіщення) і спробуйте ще раз.':
-        e.code==='nosession'?'Сесія синхронізації завершилась. Увійдіть ще раз.':'Не вдалося увімкнути сповіщення. Перевірте VAPID-ключ і спробуйте ще раз.';
+        e.code==='nosession'?'Сесія синхронізації завершилась. Увійдіть ще раз.':'Не вдалося увімкнути сповіщення (крок: '+(e.step||'?')+'; '+(e.code||e.name||'помилка')+'). Деталі в журналі нижче.';
     }
     renderPush();
   };
   const pon=$('#pon');if(pon)pon.onclick=async()=>{
     pushErr='Зачекайте…';renderPush();
     try{await enablePush(vapidKey());pushErr='';}
-    catch(e){pushErr=e.code==='denied'?'Сповіщення заблоковано. Дозвольте їх для цього сайту в налаштуваннях телефону.':'Не вдалося увімкнути сповіщення. Спробуйте ще раз.';}
+    catch(e){pushErr=e.code==='denied'?'Сповіщення заблоковано. Дозвольте їх для цього сайту в налаштуваннях телефону.':'Не вдалося увімкнути сповіщення (крок: '+(e.step||'?')+'; '+(e.code||e.name||'помилка')+'). Деталі в журналі нижче.';}
     renderPush();
   };
   const pchk=$('#pchk');if(pchk)pchk.onclick=()=>{setVapidKey('');renderPush();};
