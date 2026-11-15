@@ -32,9 +32,11 @@ function inActiveHours(tz) {
 
 async function run(db, siteBase) {
   const snap = await db.collection('users').get();
+  console.log('Users in Firestore:', snap.size, '| force:', process.env.FORCE_SEND);
   let sent = 0, skipped = 0;
   for (const doc of snap.docs) {
     const d = doc.data();
+    console.log('user', doc.id.slice(0, 6) + '…', 'hasToken=' + !!d.pushToken, 'lang=' + d.pushLang, 'tz=' + d.pushTz, 'hasData=' + !!d.data);
     if (!d.pushToken) { skipped++; continue; }
 
     let parsed = {};
@@ -42,6 +44,7 @@ async function run(db, siteBase) {
     if (process.env.FORCE_SEND !== 'true' && !inActiveHours(d.pushTz)) { skipped++; continue; }
     const lang = d.pushLang || 'it-IT';
     const list = (parsed.words && parsed.words[lang]) || [];
+    console.log('  words in', lang + ':', list.length);
     if (!list.length) { skipped++; continue; }
 
     const w = list[Math.floor(Math.random() * list.length)];
@@ -62,10 +65,11 @@ async function run(db, siteBase) {
     };
 
     try {
-      await admin.messaging().send(message);
+      const id = await admin.messaging().send(message);
+      console.log('  FCM accepted message:', id);
       sent++;
     } catch (e) {
-      console.error('Send failed for user', doc.id, e.code || e.message);
+      console.error('  Send failed:', e.code || '', e.message);
       if (e.code === 'messaging/registration-token-not-registered' || e.code === 'messaging/invalid-argument') {
         await doc.ref.update({
           pushToken: admin.firestore.FieldValue.delete(),
