@@ -134,6 +134,11 @@ textarea.paste:focus{border-color:var(--blue);outline:none}
 .big b{display:block;font-size:30px;font-weight:900;color:var(--blue)}
 .big span{color:var(--muted);font-size:15px}
 .toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:#333;color:#fff;padding:12px 18px;border-radius:14px;font-weight:700;max-width:90%;text-align:center;z-index:9}
+.confetti{position:fixed;top:50%;left:50%;width:10px;height:10px;border-radius:3px;pointer-events:none;z-index:9;animation:confetti-burst .95s ease-out forwards}
+@keyframes confetti-burst{0%{transform:translate(-50%,-50%) scale(1);opacity:1}100%{transform:translate(var(--tx),var(--ty)) scale(.4) rotate(var(--rot));opacity:0}}
+@keyframes shake-bad{0%,100%{transform:translateX(0)}20%{transform:translateX(-10px)}40%{transform:translateX(8px)}60%{transform:translateX(-6px)}80%{transform:translateX(4px)}}
+.bubble.shake{animation:shake-bad .5s ease;border-color:var(--red)}
+@media (prefers-reduced-motion: reduce){.confetti,.bubble.shake{animation:none}}
 </style>
 </head>
 <body>
@@ -503,12 +508,17 @@ async function pdfToText(file){
 /* ---------- cloud sync (Firebase: Auth + Firestore) ---------- */
 const CLOUD_KEY='slova_cloud_fb1';
 // Якщо вписати сюди apiKey і projectId з Firebase, вводити їх на кожному пристрої не потрібно.
-const BUILT_IN={apiKey:'',projectId:''};
+const BUILT_IN={apiKey:'',projectId:'',messagingSenderId:'',appId:''};
 const FB_BASE='https://www.gstatic.com/firebasejs/10.14.1/';
 let cloud={};
 try{cloud=JSON.parse(localStorage.getItem(CLOUD_KEY))||{};}catch(e){cloud={};}
 const saveCloud=()=>{try{localStorage.setItem(CLOUD_KEY,JSON.stringify(cloud));}catch(e){}};
-const cfg=()=>({apiKey:String(BUILT_IN.apiKey||cloud.apiKey||'').trim(),projectId:String(BUILT_IN.projectId||cloud.projectId||'').trim()});
+const cfg=()=>({
+  apiKey:String(BUILT_IN.apiKey||cloud.apiKey||'').trim(),
+  projectId:String(BUILT_IN.projectId||cloud.projectId||'').trim(),
+  messagingSenderId:String(BUILT_IN.messagingSenderId||cloud.messagingSenderId||'').trim(),
+  appId:String(BUILT_IN.appId||cloud.appId||'').trim()
+});
 const configured=()=>{const c=cfg();return !!(c.apiKey&&c.projectId);};
 const loggedIn=()=>!!(cloud.email&&configured());
 const wkey=w=>(w.uk||'').trim().toLowerCase()+'|'+(w.tl||'').trim().toLowerCase();
@@ -562,7 +572,7 @@ async function currentUser(){
 }
 function parseConfig(text){
   const g=k=>{const m=String(text).match(new RegExp(k+'["\']?\\s*:\\s*["\']([^"\']+)["\']'));return m?m[1].trim():'';};
-  return{apiKey:g('apiKey'),projectId:g('projectId')};
+  return{apiKey:g('apiKey'),projectId:g('projectId'),messagingSenderId:g('messagingSenderId'),appId:g('appId')};
 }
 function mergeRemote(rm){
   const tomb=Object.assign({},rm.tomb||{});
@@ -656,7 +666,7 @@ function renderSync(){
   if(g('#csave'))g('#csave').onclick=()=>{
     const c=parseConfig(g('#cfgtxt').value);
     if(!c.apiKey||!c.projectId){g('#smsg').textContent='Не знайшов apiKey і projectId. Вставте блок firebaseConfig повністю.';return;}
-    cloud.apiKey=c.apiKey;cloud.projectId=c.projectId;saveCloud();renderSync();
+    cloud.apiKey=c.apiKey;cloud.projectId=c.projectId;cloud.messagingSenderId=c.messagingSenderId;cloud.appId=c.appId;saveCloud();renderSync();
   };
   if(g('#cin'))g('#cin').onclick=()=>doAuth('in');
   if(g('#cup'))g('#cup').onclick=()=>doAuth('up');
@@ -667,7 +677,7 @@ function renderSync(){
     try{const fb=await initFirebase();await fb.auth().sendPasswordResetEmail(email);msg.textContent='Якщо такий акаунт є, лист для відновлення пароля надіслано на '+email+'. Перевірте також «Спам».';}
     catch(e){msg.textContent=friendly(e);}
   };
-  if(g('#creset'))g('#creset').onclick=()=>{cloud.apiKey='';cloud.projectId='';saveCloud();location.reload();};
+  if(g('#creset'))g('#creset').onclick=()=>{cloud.apiKey='';cloud.projectId='';cloud.messagingSenderId='';cloud.appId='';saveCloud();location.reload();};
   if(g('#cnow'))g('#cnow').onclick=async()=>{await syncNow();renderSync();};
   if(g('#cout'))g('#cout').onclick=async()=>{
     g('#smsg').textContent='Зберігаю слова в хмарі…';
@@ -679,13 +689,112 @@ function renderSync(){
   };
 }
 
+/* ---------- push notifications (Firebase Cloud Messaging, Web Push) ----------
+   Hourly reminders are sent by a free GitHub Actions job, not by this page. This page only:
+   1) registers a service worker (firebase-messaging-sw.js) that can receive a push while closed,
+   2) asks Firebase for a device "push token",
+   3) saves that token (plus which language to quiz) on this user's Firestore document, so the
+      scheduled job knows where to send the next word.
+   On iPhone, Web Push only works once the site is added to the Home Screen and opened from
+   there (iOS 16.4+) — Safari itself (as a normal browser tab) cannot receive push at all. */
+const PUSH_VAPID_LS='slova_vapid';
+function vapidKey(){try{return localStorage.getItem(PUSH_VAPID_LS)||cloud.vapidKey||'';}catch(e){return cloud.vapidKey||'';}}
+function setVapidKey(k){cloud.vapidKey=k||'';saveCloud();}
+function isStandalone(){
+  try{return window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;}catch(e){return false;}
+}
+function pushSupported(){return 'serviceWorker' in navigator&&'PushManager' in window&&'Notification' in window;}
+async function registerPushSW(){
+  const c=cfg();
+  const qs='apiKey='+encodeURIComponent(c.apiKey)+'&projectId='+encodeURIComponent(c.projectId)+
+    '&messagingSenderId='+encodeURIComponent(c.messagingSenderId)+'&appId='+encodeURIComponent(c.appId);
+  return navigator.serviceWorker.register('firebase-messaging-sw.js?'+qs);
+}
+async function enablePush(vkey){
+  if(!window.firebase||!window.firebase.messaging){
+    await loadScript(FB_BASE+'firebase-messaging-compat.js');
+  }
+  const perm=await Notification.requestPermission();
+  if(perm!=='granted'){const e=new Error('denied');e.code='denied';throw e;}
+  const reg=await registerPushSW();
+  await initFirebase();
+  const msg=window.firebase.messaging();
+  const token=await msg.getToken({vapidKey:vkey,serviceWorkerRegistration:reg});
+  if(!token){const e=new Error('notoken');e.code='notoken';throw e;}
+  const u=await currentUser();
+  if(!u){const e=new Error('nosession');e.code='nosession';throw e;}
+  await window.firebase.firestore().collection('users').doc(u.uid).set({pushToken:token,pushLang:store.lang},{merge:true});
+  cloud.pushOn=true;cloud.pushLang=store.lang;saveCloud();
+}
+async function disablePush(){
+  try{
+    if(window.firebase&&window.firebase.messaging){
+      const reg=await navigator.serviceWorker.getRegistration('firebase-messaging-sw.js');
+      if(reg){const msg=window.firebase.messaging();try{await msg.deleteToken();}catch(e){}await reg.unregister();}
+    }
+  }catch(e){}
+  try{
+    const u=await currentUser();
+    if(u)await window.firebase.firestore().collection('users').doc(u.uid).update({pushToken:window.firebase.firestore.FieldValue.delete(),pushLang:window.firebase.firestore.FieldValue.delete()});
+  }catch(e){}
+  cloud.pushOn=false;saveCloud();
+}
+function renderPush(){
+  const supported=pushSupported(),standalone=isStandalone();
+  let body='';
+  if(!loggedIn()){
+    body=`<p class="note">Спершу увімкніть <button class="linkbtn" id="gosync">синхронізацію між пристроями</button> — нагадування прив'язані до вашого акаунта.</p>`;
+  }else if(!supported||!standalone){
+    body=`<p class="note warn">На iPhone сповіщення працюють лише коли застосунок відкрито як піктограма з головного екрана (не як вкладка Safari). ${standalone?'':'Додайте застосунок на головний екран (Поділитися → На початковий екран) і відкрийте його звідти, тоді повторіть.'}</p>`;
+  }else{
+    const vk=vapidKey();
+    body=`<p class="note">Раз на годину прийде сповіщення з одним словом. Торкніться його — відкриється це слово з клавіатурою напоготові, і після відповіді застосунок сам повернеться на головний екран.</p>
+    ${!vk?`
+      <p class="note">Потрібен один раз скопійований ключ із Firebase: Project settings → Cloud Messaging → Web Push certificates → Generate key pair.</p>
+      <section><label class="lbl" for="vk">VAPID-ключ</label><input id="vk" class="input" autocomplete="off" spellcheck="false" placeholder="B..."></section>
+      <p class="note warn" id="pmsg">${esc(pushErr)}</p>
+      <button class="btn green" id="psave">Зберегти й увімкнути</button>`
+    :cloud.pushOn?`
+      <p class="note">Сповіщення увімкнено для мови «${esc(langInfo().name)}».</p>
+      <p class="note warn" id="pmsg">${esc(pushErr)}</p>
+      <button class="btn ghost" id="poff">Вимкнути сповіщення</button>`
+    :`
+      <p class="note warn" id="pmsg">${esc(pushErr)}</p>
+      <button class="btn green" id="pon">Увімкнути сповіщення</button>
+      <button class="linkbtn" id="pchk">Змінити VAPID-ключ</button>`}`;
+  }
+  app.innerHTML=`<div class="top"><button class="icon" id="back" aria-label="Назад">←</button><div style="flex:1;font-weight:900;font-size:20px">Нагадування</div></div><main class="pad">${body}</main>`;
+  $('#back').onclick=()=>go('home');
+  const gs=$('#gosync');if(gs)gs.onclick=()=>go('sync');
+  const ps=$('#psave');if(ps)ps.onclick=async()=>{
+    const k=($('#vk').value||'').trim();
+    if(!k){pushErr='Вставте VAPID-ключ.';renderPush();return;}
+    setVapidKey(k);pushErr='Зачекайте…';renderPush();
+    try{await enablePush(k);pushErr='';}
+    catch(e){
+      pushErr=e.code==='denied'?'Сповіщення заблоковано. Дозвольте їх для цього сайту в налаштуваннях телефону (Safari → цей сайт → Сповіщення) і спробуйте ще раз.':
+        e.code==='nosession'?'Сесія синхронізації завершилась. Увійдіть ще раз.':'Не вдалося увімкнути сповіщення. Перевірте VAPID-ключ і спробуйте ще раз.';
+    }
+    renderPush();
+  };
+  const pon=$('#pon');if(pon)pon.onclick=async()=>{
+    pushErr='Зачекайте…';renderPush();
+    try{await enablePush(vapidKey());pushErr='';}
+    catch(e){pushErr=e.code==='denied'?'Сповіщення заблоковано. Дозвольте їх для цього сайту в налаштуваннях телефону.':'Не вдалося увімкнути сповіщення. Спробуйте ще раз.';}
+    renderPush();
+  };
+  const pchk=$('#pchk');if(pchk)pchk.onclick=()=>{setVapidKey('');renderPush();};
+  const poff=$('#poff');if(poff)poff.onclick=async()=>{await disablePush();renderPush();};
+}
+let pushErr='';
+
 /* ---------- views ---------- */
-let view='home',L=null,importFlip=false,confirmClear=false,voiceTab=null,elevenList=null,elevenErr='',azureList=null,azureErr='';
+let view='home',L=null,importFlip=false,confirmClear=false,voiceTab=null,elevenList=null,elevenErr='',azureList=null,azureErr='',Q=null,quickCloseT=null;
 function go(v){view=v;render();}
 function render(){
   stopListen();
   app.style.paddingBottom='';
-  ({home:renderHome,import:renderImport,list:renderList,lesson:renderLesson,done:renderDone,sync:renderSync,conjsetup:renderConjSetup,voice:renderVoice})[view]();
+  ({home:renderHome,import:renderImport,list:renderList,lesson:renderLesson,done:renderDone,sync:renderSync,conjsetup:renderConjSetup,voice:renderVoice,push:renderPush,quick:renderQuick})[view]();
   window.scrollTo(0,0);
 }
 
@@ -721,6 +830,7 @@ function renderHome(){
       ${store.lang==='it-IT'?'<button class="btn ghost" id="conj">Дієвідмінювання</button>':''}
       ${('speechSynthesis' in window)?'<button class="btn ghost" id="voice">Голос озвучки</button>':''}
       <button class="btn ghost" id="sync">${loggedIn()?'☁ Синхронізація увімкнена':'☁ Синхронізація між пристроями'}</button>
+      <button class="btn ghost" id="push">🔔 Нагадування${cloud.pushOn?' (увімкнено)':''}</button>
       ${loggedIn()?`<p class="hint" id="cstat">${esc(statusText())}</p>`:''}
     </div>
   </main>`;
@@ -734,6 +844,7 @@ function renderHome(){
   const cj=$('#conj');if(cj)cj.onclick=()=>go('conjsetup');
   const vb=$('#voice');if(vb)vb.onclick=()=>{voiceTab=null;elevenErr='';azureErr='';go('voice');};
   $('#sync').onclick=()=>go('sync');
+  $('#push').onclick=()=>{pushErr='';go('push');};
 }
 
 function renderVoice(){
@@ -1210,6 +1321,92 @@ function renderDone(){
   $('#more').onclick=conj?startConj:startLesson;$('#home').onclick=()=>go('home');
 }
 
+/* ---------- quick word (opened from a push-notification tap) ---------- */
+function fireConfetti(){
+  const colors=['#58cc02','#1cb0f6','#ffc800','#ff9600','#ce82ff'];
+  for(let i=0;i<18;i++){
+    const d=document.createElement('div');d.className='confetti';
+    const ang=Math.random()*Math.PI*2,dist=60+Math.random()*130;
+    d.style.setProperty('--tx',(Math.cos(ang)*dist)+'px');
+    d.style.setProperty('--ty',(Math.sin(ang)*dist)+'px');
+    d.style.setProperty('--rot',(Math.random()*360-180)+'deg');
+    d.style.background=colors[i%colors.length];
+    d.style.animationDelay=(Math.random()*0.12)+'s';
+    document.body.appendChild(d);
+    setTimeout(()=>d.remove(),1200);
+  }
+}
+function shakeBad(){
+  const b=$('.bubble');if(!b)return;
+  b.classList.remove('shake');void b.offsetWidth;b.classList.add('shake');
+}
+function commitQuick(ok){
+  if(Q.wid){
+    const w=cur().find(x=>x.id===Q.wid);
+    if(w){
+      if(ok){w.lvl=Math.min(5,(w.lvl||0)+1);w.ok=(w.ok||0)+1;}
+      else{w.lvl=Math.max(0,(w.lvl||0)-1);w.bad=(w.bad||0)+1;}
+      w.last=Date.now();
+    }
+  }
+  const today=new Date().toLocaleDateString('sv'),y=new Date(Date.now()-864e5).toLocaleDateString('sv');
+  if(store.streak.last!==today){store.streak.n=(store.streak.last===y?(store.streak.n||0):0)+1;store.streak.last=today;}
+  save();scheduleSync();
+}
+function scheduleQuickClose(){
+  clearTimeout(quickCloseT);
+  quickCloseT=setTimeout(()=>{if(view==='quick'){Q=null;go('home');}},2200);
+}
+function renderQuick(){
+  if(!Q){go('home');return;}
+  if(Q.lang&&Q.lang!==store.lang){store.lang=Q.lang;save();}
+  let mid='',dock='';
+  if(Q.stage==='ask'){
+    const acc=ACC[short()]||'';
+    mid=`<input id="qinp" class="input" type="text" lang="${store.lang}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done" placeholder="Введіть переклад">
+      ${acc?`<div class="acc" aria-label="Спеціальні символи">${acc.split('').map(c=>`<button type="button" data-ch="${c}">${c}</button>`).join('')}</div>`:''}`;
+    dock=`<button class="btn green" id="primary" disabled>Перевірити</button>`;
+  }else{
+    const ok=Q.res.kind==='ok';
+    mid=`<div class="said">Ви написали: «${esc(Q.res.said)}»</div>`;
+    dock=`<div class="msg">
+        <div class="t">${ok?'Правильно!':'Правильна відповідь:'}</div>
+        <div class="a">${esc(Q.tl.split('/').map(s=>s.trim()).join(' / '))} <button class="spk" id="hear" aria-label="Прослухати" style="color:inherit">${ICON_SPK}</button></div>
+      </div>`;
+  }
+  const cls=Q.stage==='result'?(Q.res.kind==='ok'?'ok':'bad'):'';
+  app.innerHTML=`
+  <div class="top"><button class="icon" id="quit" aria-label="Закрити">✕</button><div style="flex:1;font-weight:900;font-size:20px">Слово за хвилину</div></div>
+  <main class="body">
+    <h1 class="ask">Напишіть ${langInfo().adv}</h1>
+    <div class="bubble">${esc(Q.uk)}</div>
+    ${mid}
+  </main>
+  <footer class="dock ${cls}">${dock}</footer>`;
+  const dk=$('.dock');if(dk)app.style.paddingBottom=dk.offsetHeight+'px';
+  $('#quit').onclick=()=>{clearTimeout(quickCloseT);Q=null;go('home');};
+  if(Q.stage==='ask'){
+    const inp=$('#qinp'),btn=$('#primary');
+    inp.oninput=()=>{btn.disabled=!inp.value.trim();};
+    $$('[data-ch]').forEach(b=>b.onclick=()=>{
+      const s=inp.selectionStart,e=inp.selectionEnd;inp.value=inp.value.slice(0,s)+b.dataset.ch+inp.value.slice(e);
+      inp.focus();inp.selectionStart=inp.selectionEnd=s+1;btn.disabled=!inp.value.trim();
+    });
+    const submit=()=>{
+      const v=inp.value.trim();if(!v)return;
+      const r=judgeType(v,Q.tl);r.said=v;Q.res=r;Q.stage='result';
+      playSound(r.kind==='ok'?'ok':'bad');commitQuick(r.kind==='ok');renderQuick();
+    };
+    inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();submit();}});
+    btn.onclick=submit;
+    setTimeout(()=>inp.focus(),30);
+  }else{
+    const h=$('#hear');if(h)h.onclick=()=>say(Q.tl);
+    if(Q.res.kind==='ok')fireConfetti();else shakeBad();
+    scheduleQuickClose();
+  }
+}
+
 /* ---------- speech recognition ---------- */
 let rec=null,listening=false,gotFinal=false;
 function stopListen(){
@@ -1297,6 +1494,35 @@ document.addEventListener('keydown',e=>{
 document.addEventListener('visibilitychange',()=>{if(loggedIn())syncNow();});
 if('speechSynthesis' in window){try{speechSynthesis.addEventListener('voiceschanged',()=>{if(view==='voice')renderVoice();});speechSynthesis.getVoices();}catch(e){}}
 applyTheme();
+
+/* If opened from a push-notification tap, jump straight into the single-word screen. */
+(function(){
+  try{
+    const p=new URLSearchParams(location.search);
+    if(p.get('notif')==='1'){
+      Q={uk:p.get('uk')||'',tl:p.get('tl')||'',lang:p.get('lang')||store.lang,wid:p.get('wid')||'',stage:'ask',res:null};
+      view='quick';
+      history.replaceState(null,'',location.pathname);
+    }
+  }catch(e){}
+})();
+/* If this device already has push enabled and the app happens to be open (foreground) when a
+   reminder arrives, show the same single-word screen immediately instead of relying on a tap. */
+if(cloud.pushOn&&pushSupported()&&isStandalone()){
+  (async()=>{
+    try{
+      if(!window.firebase||!window.firebase.messaging)await loadScript(FB_BASE+'firebase-messaging-compat.js');
+      await initFirebase();
+      window.firebase.messaging().onMessage(payload=>{
+        const d=(payload&&payload.data)||{};
+        if(!d.uk||!d.tl)return;
+        Q={uk:d.uk,tl:d.tl,lang:d.lang||store.lang,wid:d.wid||'',stage:'ask',res:null};
+        go('quick');
+      });
+    }catch(e){}
+  })();
+}
+
 render();
 if(loggedIn())syncNow();
 })();
