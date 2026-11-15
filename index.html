@@ -169,7 +169,7 @@ const ART={
 const ACC={it:'àèéìòù',fr:'àâçéèêëîïôùûü',es:'áéíóúñü',de:'äöüß',pl:'ąćęłńóśźż',pt:'áàâãçéêíóôõú'};
 const KEY='slova_trainer_v1';
 // Оновлюється при кожному залитті на GitHub: версія і дата/час (за Римом).
-const APP_VERSION='1.9',APP_UPDATED='16.11.2026 00:05';
+const APP_VERSION='2.0',APP_UPDATED='16.11.2026 00:20';
 const ROUND=10;
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 
@@ -798,7 +798,8 @@ function renderPush(){
   app.innerHTML=`<div class="top"><button class="icon" id="back" aria-label="Назад">←</button><div style="flex:1;font-weight:900;font-size:20px">Нагадування</div></div><main class="pad">${body}
     <section><div class="lbl">Журнал помилок</div>
       <pre id="logbox" style="white-space:pre-wrap;word-break:break-all;font-size:12px;font-weight:600;border:2px solid var(--line);border-radius:12px;padding:10px;max-height:260px;overflow:auto;margin:0 0 10px">${esc(logText())}</pre>
-      <div class="seg"><button id="logcopy">Скопіювати</button><button id="logclear">Очистити</button></div></section></main>`;
+      <div class="seg"><button id="logcopy">Скопіювати</button><button id="logclear">Очистити</button></div>
+      ${cloud.pushOn?`<div class="seg" style="margin-top:10px"><button id="ptest">Тест показу</button><button id="pdiag">Діагностика</button></div>`:''}</section></main>`;
   $('#back').onclick=()=>go('home');
   $('#logcopy').onclick=async()=>{
     const t=logText();
@@ -806,6 +807,28 @@ function renderPush(){
     catch(e){const r=document.createRange();r.selectNodeContents($('#logbox'));const sel=getSelection();sel.removeAllRanges();sel.addRange(r);toast('Виділено — скопіюйте вручну');}
   };
   $('#logclear').onclick=()=>{try{localStorage.removeItem(LOG_KEY);}catch(e){}renderPush();};
+  const pt=$('#ptest');if(pt)pt.onclick=async()=>{
+    try{
+      const reg=await navigator.serviceWorker.getRegistration();
+      if(!reg)throw new Error('немає service worker');
+      await reg.showNotification('Слова · тест',{body:'зламаний',icon:'icon.png',data:{uk:'зламаний',tl:'rotto',lang:'it-IT',wid:''}});
+      toast('Тестове сповіщення надіслано локально. Якщо його не видно — проблема в показі на телефоні.');
+    }catch(e){logErr('test-show',e);toast('Тест не вдався: '+e.message);renderPush();}
+  };
+  const pd=$('#pdiag');if(pd)pd.onclick=async()=>{
+    let x='\n\n--- Діагностика ---';
+    try{
+      const reg=await navigator.serviceWorker.getRegistration();
+      x+='\nSW: '+(reg?('scope='+reg.scope+' active='+(reg.active?reg.active.state+' '+reg.active.scriptURL.split('/').pop().slice(0,60):'нема')+' waiting='+!!reg.waiting):'не зареєстровано');
+      const sub=reg&&await reg.pushManager.getSubscription();
+      x+='\nПідписка push: '+(sub?('є, '+new URL(sub.endpoint).host):'НЕМАЄ');
+      x+='\nТокен у цьому пристрої: …'+String(cloud.pushToken||'').slice(-8);
+      const c=await caches.open('slova-log'),ks=await c.keys(),rows=[];
+      for(const k of ks)rows.push(await(await c.match(k)).text());
+      rows.sort();x+='\nЖурнал service worker ('+rows.length+'):\n'+(rows.slice(-12).join('\n')||'(порожньо: жодного push ще не оброблено)');
+    }catch(e){x+='\nПомилка діагностики: '+e.message;}
+    $('#logbox').textContent=logText()+x;
+  };
   const gs=$('#gosync');if(gs)gs.onclick=()=>go('sync');
   const ps=$('#psave');if(ps)ps.onclick=async()=>{
     const k=($('#vk').value||'').trim();
