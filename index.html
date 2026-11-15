@@ -508,7 +508,7 @@ async function pdfToText(file){
 /* ---------- cloud sync (Firebase: Auth + Firestore) ---------- */
 const CLOUD_KEY='slova_cloud_fb1';
 // Якщо вписати сюди apiKey і projectId з Firebase, вводити їх на кожному пристрої не потрібно.
-const BUILT_IN={apiKey:'',projectId:'',messagingSenderId:'',appId:''};
+const BUILT_IN={apiKey:'AIzaSyDcUlw9LeE5o2dwoB3sRH_Y0TVv0BXYFZg',projectId:'slova-15121',messagingSenderId:'11021029490',appId:'1:11021029490:web:cd53487edaf894a1c1f2eb'};
 const FB_BASE='https://www.gstatic.com/firebasejs/10.14.1/';
 let cloud={};
 try{cloud=JSON.parse(localStorage.getItem(CLOUD_KEY))||{};}catch(e){cloud={};}
@@ -651,7 +651,7 @@ function renderSync(){
     <button class="btn green" id="cin">Увійти</button>
     <button class="btn ghost" id="cup">Створити акаунт</button>
     <button class="linkbtn" id="cforgot" style="align-self:flex-start;color:var(--muted)">Забули пароль?</button>
-    <button class="linkbtn" id="creset" style="align-self:flex-start;color:var(--muted)">Змінити налаштування Firebase</button>`;
+    ${BUILT_IN.apiKey?'':'<button class="linkbtn" id="creset" style="align-self:flex-start;color:var(--muted)">Змінити налаштування Firebase</button>'}`;
   }else{
     body=`<p class="note">Ви увійшли як <b>${esc(cloud.email||'')}</b>.</p>
     <p class="note" id="cstat">${esc(statusText())}</p>
@@ -698,7 +698,7 @@ function renderSync(){
    On iPhone, Web Push only works once the site is added to the Home Screen and opened from
    there (iOS 16.4+) — Safari itself (as a normal browser tab) cannot receive push at all. */
 const PUSH_VAPID_LS='slova_vapid';
-const BUILT_IN_VAPID='';
+const BUILT_IN_VAPID='BDMC4OFB_liKtVkEGhd4KRyYT5yr46HNROJ7ZH8n1q8DjFsbseZVkf493QA848XP9MCfnm0KsjZ4TWJCMXx3M0A';
 function vapidKey(){if(BUILT_IN_VAPID)return BUILT_IN_VAPID;try{return localStorage.getItem(PUSH_VAPID_LS)||cloud.vapidKey||'';}catch(e){return cloud.vapidKey||'';}}
 function setVapidKey(k){cloud.vapidKey=k||'';saveCloud();}
 function isStandalone(){
