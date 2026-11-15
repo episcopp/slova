@@ -724,7 +724,7 @@ async function enablePush(vkey){
   if(!token){const e=new Error('notoken');e.code='notoken';throw e;}
   const u=await currentUser();
   if(!u){const e=new Error('nosession');e.code='nosession';throw e;}
-  await window.firebase.firestore().collection('users').doc(u.uid).set({pushToken:token,pushLang:store.lang},{merge:true});
+  await window.firebase.firestore().collection('users').doc(u.uid).set({pushToken:token,pushLang:store.lang,pushTz:(Intl.DateTimeFormat().resolvedOptions().timeZone||'')},{merge:true});
   cloud.pushOn=true;cloud.pushLang=store.lang;saveCloud();
 }
 async function disablePush(){
@@ -736,7 +736,7 @@ async function disablePush(){
   }catch(e){}
   try{
     const u=await currentUser();
-    if(u)await window.firebase.firestore().collection('users').doc(u.uid).update({pushToken:window.firebase.firestore.FieldValue.delete(),pushLang:window.firebase.firestore.FieldValue.delete()});
+    if(u)await window.firebase.firestore().collection('users').doc(u.uid).update({pushToken:window.firebase.firestore.FieldValue.delete(),pushLang:window.firebase.firestore.FieldValue.delete(),pushTz:window.firebase.firestore.FieldValue.delete()});
   }catch(e){}
   cloud.pushOn=false;saveCloud();
 }
@@ -749,7 +749,7 @@ function renderPush(){
     body=`<p class="note warn">На iPhone сповіщення працюють лише коли застосунок відкрито як піктограма з головного екрана (не як вкладка Safari). ${standalone?'':'Додайте застосунок на головний екран (Поділитися → На початковий екран) і відкрийте його звідти, тоді повторіть.'}</p>`;
   }else{
     const vk=vapidKey();
-    body=`<p class="note">Раз на годину прийде сповіщення з одним словом. Торкніться його — відкриється це слово з клавіатурою напоготові, і після відповіді застосунок сам повернеться на головний екран.</p>
+    body=`<p class="note">Раз на годину (з 8:00 до 22:00 за вашим місцевим часом) прийде сповіщення з одним словом. Торкніться його — відкриється це слово з клавіатурою напоготові, і після відповіді застосунок сам повернеться на головний екран.</p>
     ${!vk?`
       <p class="note">Потрібен один раз скопійований ключ із Firebase: Project settings → Cloud Messaging → Web Push certificates → Generate key pair.</p>
       <section><label class="lbl" for="vk">VAPID-ключ</label><input id="vk" class="input" autocomplete="off" spellcheck="false" placeholder="B..."></section>

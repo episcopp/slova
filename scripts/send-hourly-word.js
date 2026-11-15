@@ -18,6 +18,18 @@ function main() {
   return run(db, siteBase);
 }
 
+// Reminders only go out from 08:00 to 22:00 in the user's own time zone (saved at enable time).
+const START_HOUR = 8, END_HOUR = 22;
+function inActiveHours(tz) {
+  let hour;
+  try {
+    hour = parseInt(new Intl.DateTimeFormat('en-GB', { hour: '2-digit', hourCycle: 'h23', timeZone: tz || 'Europe/Rome' }).format(new Date()), 10);
+  } catch (e) {
+    hour = parseInt(new Intl.DateTimeFormat('en-GB', { hour: '2-digit', hourCycle: 'h23', timeZone: 'Europe/Rome' }).format(new Date()), 10);
+  }
+  return hour >= START_HOUR && hour <= END_HOUR;
+}
+
 async function run(db, siteBase) {
   const snap = await db.collection('users').get();
   let sent = 0, skipped = 0;
@@ -27,6 +39,7 @@ async function run(db, siteBase) {
 
     let parsed = {};
     try { parsed = JSON.parse(d.data || '{}'); } catch (e) { skipped++; continue; }
+    if (!inActiveHours(d.pushTz)) { skipped++; continue; }
     const lang = d.pushLang || 'it-IT';
     const list = (parsed.words && parsed.words[lang]) || [];
     if (!list.length) { skipped++; continue; }
