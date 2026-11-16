@@ -100,6 +100,15 @@ button,select,input,textarea{font:inherit;color:inherit}
 .acc{display:flex;flex-wrap:wrap;gap:8px}
 .acc button{min-width:42px;border:2px solid var(--line);border-bottom-width:4px;border-radius:12px;background:var(--surface);padding:6px 10px;font-weight:800;font-size:18px;cursor:pointer}
 .said{color:var(--muted);font-size:16px;font-weight:600}
+.bank-top{display:flex;gap:12px;align-items:flex-start}
+.anslines{flex:1;min-height:112px;display:flex;flex-wrap:wrap;align-content:flex-start;gap:8px;background:repeating-linear-gradient(to bottom,transparent 0 54px,var(--line) 54px 56px)}
+.tile{height:48px;padding:0 16px;border:2px solid var(--line);border-bottom-width:4px;border-radius:14px;background:var(--surface);color:var(--text);font:inherit;font-size:19px;font-weight:800;cursor:pointer}
+.tile:active{transform:translateY(2px);border-bottom-width:2px}
+.tile.ghost{background:var(--dis);border-color:transparent;color:transparent;cursor:default;pointer-events:none}
+.tray{display:flex;flex-wrap:wrap;justify-content:center;gap:10px 8px;margin-top:22px}
+.kbtoggle{flex:none;width:52px;height:52px;border-radius:14px;border:2px solid var(--line);border-bottom-width:4px;background:var(--dis);color:var(--muted);display:flex;align-items:center;justify-content:center;cursor:pointer}
+.kbrow{display:flex;gap:12px;align-items:flex-start}
+.kbrow .field{flex:1;width:auto;min-width:0}
 
 .dock{position:fixed;left:0;right:0;bottom:var(--kb,0px);width:100%;max-width:640px;margin:0 auto;z-index:5;background:var(--bg);
   padding:16px 20px calc(16px + env(safe-area-inset-bottom,0px));border-top:2px solid var(--line);display:flex;flex-direction:column;gap:10px;
@@ -169,7 +178,7 @@ const ART={
 const ACC={it:'àèéìòù',fr:'àâçéèêëîïôùûü',es:'áéíóúñü',de:'äöüß',pl:'ąćęłńóśźż',pt:'áàâãçéêíóôõú'};
 const KEY='slova_trainer_v1';
 // Оновлюється при кожному залитті на GitHub: версія і дата/час (за Римом).
-const APP_VERSION='2.0',APP_UPDATED='16.11.2026 00:20';
+const APP_VERSION='2.1',APP_UPDATED='16.11.2026 13:20';
 const ROUND=10;
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 
@@ -233,6 +242,8 @@ const app=document.getElementById('app');
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const $=(s,r)=>(r||document).querySelector(s);
 const $$=(s,r)=>Array.from((r||document).querySelectorAll(s));
+const ICON_KB='<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="3"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>';
+const ICON_TILES='<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="8" height="7" rx="2"/><rect x="13" y="4" width="8" height="7" rx="2"/><rect x="3" y="13" width="8" height="7" rx="2"/><rect x="13" y="13" width="8" height="7" rx="2"/></svg>';
 const ICON_MIC='<svg viewBox="0 0 24 24" width="44" height="44" fill="currentColor" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>';
 const ICON_SPK='<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M3 10v4h4l5 5V5L7 10H3zm13.5 2a4.5 4.5 0 0 0-2.5-4.03v8.06A4.5 4.5 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06a9 9 0 0 0 0-17.54z"/></svg>';
 const ICON_IDK='<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 1 2.64 6.36"/><path d="M3 21v-5h5"/></svg>';
@@ -1254,6 +1265,50 @@ function startConj(){
   go('lesson');
 }
 
+
+/* ---------- word bank (Duolingo-style tiles) ----------
+   The answer is built by tapping words from a shuffled set (the right words + distractors taken
+   from the user's own word list). The keyboard stays available via the toggle button. */
+const bankFirst=s=>String(s).split('/')[0].replace(/\s*\([^)]*\)/g,' ').trim();
+function makeBank(item){
+  const ans=bankFirst(item.tl).split(/\s+/).filter(Boolean);
+  if(!ans.length)return null;
+  const nk=x=>normText(x,true),have=new Set(ans.map(nk)),pool=[],seen=new Set();
+  for(const w of cur())for(const t of bankFirst(w.tl).split(/\s+/)){
+    const k=nk(t);if(k&&!have.has(k)&&!seen.has(k)){seen.add(k);pool.push(t);}
+  }
+  const avg=ans.reduce((a,t)=>a+t.length,0)/ans.length;
+  pool.sort((a,b)=>(Math.abs(a.length-avg)+Math.random()*3)-(Math.abs(b.length-avg)+Math.random()*3));
+  const tiles=ans.concat(pool.slice(0,ans.length===1?5:3)).map((t,i)=>({id:i,t}));
+  if(tiles.length<3)return null;
+  for(let i=tiles.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[tiles[i],tiles[j]]=[tiles[j],tiles[i]];}
+  return{tiles};
+}
+function bankState(st,item){
+  if(st.bankKey!==item.key){st.bankKey=item.key;st.bank=makeBank(item);st.sel=[];}
+  return st.bank;
+}
+function bankInner(st){
+  const used=new Set(st.sel),T=id=>st.bank.tiles.find(t=>t.id===id).t;
+  return `<div class="bank-top"><div class="anslines">${st.sel.map(id=>`<button type="button" class="tile" data-un="${id}">${esc(T(id))}</button>`).join('')}</div>
+    <button type="button" class="kbtoggle" id="tokb" aria-label="Ввести з клавіатури">${ICON_KB}</button></div>
+    <div class="tray">${st.bank.tiles.map(t=>used.has(t.id)?`<span class="tile ghost">${esc(t.t)}</span>`:`<button type="button" class="tile" data-pk="${t.id}">${esc(t.t)}</button>`).join('')}</div>`;
+}
+function bindBank(st,btn,rerender,onSubmit){
+  const wrap=$('#bankwrap'),T=id=>st.bank.tiles.find(t=>t.id===id).t;
+  const paint=()=>{
+    wrap.innerHTML=bankInner(st);btn.disabled=!st.sel.length;
+    $$('[data-pk]',wrap).forEach(b=>b.onclick=()=>{st.sel.push(+b.dataset.pk);paint();});
+    $$('[data-un]',wrap).forEach(b=>b.onclick=()=>{st.sel=st.sel.filter(x=>x!==+b.dataset.un);paint();});
+    $('#tokb',wrap).onclick=()=>{store.input='kbd';save();rerender();};
+  };
+  paint();
+  btn.onclick=()=>{
+    if(!st.sel.length)return;
+    const v=st.sel.map(T).join(' ');st.bankKey=null;onSubmit(v);
+  };
+}
+
 /* ---------- lesson ---------- */
 function startLesson(){
   const ws=cur();if(!ws.length)return;
@@ -1278,7 +1333,7 @@ const speakMode=()=>store.mode==='speak'&&!!SR&&!L.forceType;
 
 function renderLesson(){
   const item=curItem(),lang=langInfo(),sp=speakMode(),pct=Math.round(L.solved/L.total*100),conj=(L.kind==='conj');
-  let mid='',dock='';
+  let mid='',dock='',useBank=false;
   if(L.stage==='ask'){
     if(sp){
       mid=`<div class="mic-zone">
@@ -1289,7 +1344,10 @@ function renderLesson(){
       dock=`<button class="btn ghost" id="cant">Не можу говорити зараз</button>`;
     }else{
       const acc=ACC[short()]||'';
-      mid=`<textarea id="inp" class="field" rows="2" lang="${store.lang}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done" placeholder="${conj?'Введіть форму дієслова':'Введіть переклад'}"></textarea>
+      const bank=conj?null:bankState(L,item);useBank=!!bank&&store.input!=='kbd';
+      mid=useBank?`<div id="bankwrap"></div>`:
+        `<div class="kbrow"><textarea id="inp" class="field" rows="2" lang="${store.lang}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done" placeholder="${conj?'Введіть форму дієслова':'Введіть переклад'}"></textarea>
+        ${bank?`<button type="button" class="kbtoggle" id="tobank" aria-label="Вибір слів">${ICON_TILES}</button>`:''}</div>
         ${acc?`<div class="acc" aria-label="Спеціальні символи">${acc.split('').map(c=>`<button type="button" data-ch="${c}">${c}</button>`).join('')}</div>`:''}`;
       dock=`<button class="btn green" id="primary" disabled>Перевірити</button>`;
     }
@@ -1323,8 +1381,11 @@ function renderLesson(){
     if(sp){
       $('#mic').onclick=toggleMic;
       $('#cant').onclick=()=>{L.forceType=true;renderLesson();};
+    }else if(useBank){
+      bindBank(L,$('#primary'),renderLesson,v=>{const r=judgeType(v,item.tl);r.said=v;r.viaSpeech=false;finishAnswer(r);});
     }else{
       const inp=$('#inp'),btn=$('#primary');
+      const tb=$('#tobank');if(tb)tb.onclick=()=>{store.input='bank';save();renderLesson();};
       inp.oninput=()=>{btn.disabled=!inp.value.trim();};
       $$('[data-ch]').forEach(b=>b.onclick=()=>{
         const s=inp.selectionStart,e=inp.selectionEnd;inp.value=inp.value.slice(0,s)+b.dataset.ch+inp.value.slice(e);
@@ -1347,7 +1408,7 @@ function renderLesson(){
     }
   }
 }
-function finishAnswer(r){L.res=r;L.stage='result';playSound(r.kind==='ok'?'ok':'bad');renderLesson();}
+function finishAnswer(r){L.bankKey=null;L.res=r;L.stage='result';playSound(r.kind==='ok'?'ok':'bad');renderLesson();}
 
 function commit(){
   const item=curItem(),first=!L.retry.has(item.key),ok=L.res.kind==='ok';
@@ -1425,10 +1486,13 @@ function scheduleQuickClose(){
 function renderQuick(){
   if(!Q){go('home');return;}
   if(Q.lang&&Q.lang!==store.lang){store.lang=Q.lang;save();}
-  let mid='',dock='';
+  let mid='',dock='',useBank=false;
   if(Q.stage==='ask'){
     const acc=ACC[short()]||'';
-    mid=`<input id="qinp" class="input" type="text" lang="${store.lang}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done" placeholder="Введіть переклад">
+    const bank=bankState(Q,{tl:Q.tl,key:Q.wid||Q.uk});useBank=!!bank&&store.input!=='kbd';
+    mid=useBank?`<div id="bankwrap"></div>`:
+      `<div class="kbrow"><input id="qinp" class="input" type="text" lang="${store.lang}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done" placeholder="Введіть переклад">
+      ${bank?`<button type="button" class="kbtoggle" id="tobank" aria-label="Вибір слів">${ICON_TILES}</button>`:''}</div>
       ${acc?`<div class="acc" aria-label="Спеціальні символи">${acc.split('').map(c=>`<button type="button" data-ch="${c}">${c}</button>`).join('')}</div>`:''}`;
     dock=`<button class="btn green" id="primary" disabled>Перевірити</button>`;
   }else{
@@ -1450,8 +1514,14 @@ function renderQuick(){
   <footer class="dock ${cls}">${dock}</footer>`;
   const dk=$('.dock');if(dk)app.style.paddingBottom=dk.offsetHeight+'px';
   $('#quit').onclick=()=>{clearTimeout(quickCloseT);Q=null;go('home');};
-  if(Q.stage==='ask'){
+  if(Q.stage==='ask'&&useBank){
+    bindBank(Q,$('#primary'),renderQuick,v=>{
+      const r=judgeType(v,Q.tl);r.said=v;Q.res=r;Q.stage='result';
+      playSound(r.kind==='ok'?'ok':'bad');commitQuick(r.kind==='ok');renderQuick();
+    });
+  }else if(Q.stage==='ask'){
     const inp=$('#qinp'),btn=$('#primary');
+    const tb=$('#tobank');if(tb)tb.onclick=()=>{store.input='bank';save();renderQuick();};
     inp.oninput=()=>{btn.disabled=!inp.value.trim();};
     $$('[data-ch]').forEach(b=>b.onclick=()=>{
       const s=inp.selectionStart,e=inp.selectionEnd;inp.value=inp.value.slice(0,s)+b.dataset.ch+inp.value.slice(e);
