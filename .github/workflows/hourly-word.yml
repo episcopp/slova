@@ -2,7 +2,8 @@ name: Hourly word notification
 
 on:
   schedule:
-    - cron: '0 * * * *'   # every hour, on the hour (UTC)
+    # GitHub often skips scheduled runs, so run often; the script itself sends at most once per ~hour per user.
+    - cron: '7,22,37,52 * * * *'
   workflow_dispatch: {}    # lets you run it manually from the Actions tab to test
 
 jobs:

@@ -41,7 +41,10 @@ async function run(db, siteBase) {
 
     let parsed = {};
     try { parsed = JSON.parse(d.data || '{}'); } catch (e) { skipped++; continue; }
-    if (process.env.FORCE_SEND !== 'true' && !inActiveHours(d.pushTz)) { skipped++; continue; }
+    const force = process.env.FORCE_SEND === 'true';
+    if (!force && !inActiveHours(d.pushTz)) { skipped++; continue; }
+    // The job runs every ~15 min because GitHub drops many scheduled runs; this makes it send about once an hour.
+    if (!force && d.lastPushAt && Date.now() - d.lastPushAt < 50 * 60 * 1000) { skipped++; continue; }
     const lang = d.pushLang || 'it-IT';
     const list = (parsed.words && parsed.words[lang]) || [];
     console.log('  words in', lang + ':', list.length);
@@ -65,6 +68,7 @@ async function run(db, siteBase) {
       const id = await admin.messaging().send(message);
       console.log('  FCM accepted message:', id);
       sent++;
+      await doc.ref.update({ lastPushAt: Date.now() }).catch((e) => console.error('  could not save lastPushAt:', e.message));
     } catch (e) {
       console.error('  Send failed:', e.code || '', e.message);
       if (e.code === 'messaging/registration-token-not-registered' || e.code === 'messaging/invalid-argument') {
