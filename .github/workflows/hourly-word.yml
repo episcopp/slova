@@ -2,13 +2,28 @@ name: Hourly word notification
 
 on:
   schedule:
-    # GitHub often skips scheduled runs, so run often; the script itself sends at most once per ~hour per user.
-    - cron: '7,22,37,52 * * * *'
-  workflow_dispatch: {}    # lets you run it manually from the Actions tab to test
+    # Watchdog only: GitHub fires these rarely. The job below keeps itself alive by starting the next run.
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Send one word right now, ignoring 08:00-22:00 and the hourly limit (test)'
+        type: boolean
+        default: false
+
+# One run at a time; a newer waiting run replaces an older waiting one, never cancels the running one.
+concurrency:
+  group: hourly-word
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
 
 jobs:
   notify:
     runs-on: ubuntu-latest
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -16,8 +31,14 @@ jobs:
           node-version: '20'
       - name: Install firebase-admin
         run: npm install firebase-admin@12 --no-save
-      - name: Send hourly word
+      - name: Send words (stays alive ~5h40m, checking every 5 minutes)
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          FORCE_SEND: ${{ github.event_name == 'workflow_dispatch' }}  # manual run ignores 08-22 hours
+          FORCE_SEND: ${{ inputs.force == true }}
+          LOOP_MINUTES: '340'
         run: node scripts/send-hourly-word.js
+      - name: Start the next run
+        if: ${{ inputs.force != true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run hourly-word.yml --ref "${{ github.ref_name }}" -R "${{ github.repository }}"

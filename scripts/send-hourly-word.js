@@ -1,4 +1,4 @@
-// Runs inside GitHub Actions once an hour. For every registered device (Firestore field
+// Runs inside GitHub Actions (about once an hour per user). For every registered device (Firestore field
 // pushToken on users/{uid}), picks a random word from that user's own word list in the
 // language they're currently reminding themselves of (pushLang), and sends one push
 // notification via Firebase Cloud Messaging. Uses a service-account key, never a key
@@ -15,7 +15,22 @@ function main() {
   admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
   const db = admin.firestore();
   const siteBase = process.env.SITE_BASE || 'https://episcopp.github.io/slova/';
-  return run(db, siteBase);
+  // GitHub fires scheduled workflows only a couple of times a day, so in the normal (non-manual)
+  // mode this process stays alive for LOOP_MINUTES and checks every 5 minutes; the workflow then
+  // starts the next run itself. A manual "force" run just sends once and exits.
+  const loopMin = Number(process.env.LOOP_MINUTES || 0);
+  if (!loopMin || process.env.FORCE_SEND === 'true') return run(db, siteBase, false);
+  return loop(db, siteBase, loopMin);
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function loop(db, siteBase, minutes) {
+  const end = Date.now() + minutes * 60 * 1000;
+  console.log('Loop mode for', minutes, 'min, check every 5 min. Started', new Date().toISOString());
+  while (Date.now() < end) {
+    try { await run(db, siteBase, true); } catch (e) { console.error('Cycle failed:', e.message); }
+    await sleep(5 * 60 * 1000);
+  }
+  console.log('Loop finished', new Date().toISOString());
 }
 
 // Reminders only go out from 08:00 to 22:00 in the user's own time zone (saved at enable time).
@@ -30,13 +45,14 @@ function inActiveHours(tz) {
   return hour >= START_HOUR && hour <= END_HOUR;
 }
 
-async function run(db, siteBase) {
+async function run(db, siteBase, quiet) {
+  const log = quiet ? () => {} : console.log;
   const snap = await db.collection('users').get();
-  console.log('Users in Firestore:', snap.size, '| force:', process.env.FORCE_SEND);
+  log('Users in Firestore:', snap.size, '| force:', process.env.FORCE_SEND);
   let sent = 0, skipped = 0;
   for (const doc of snap.docs) {
     const d = doc.data();
-    console.log('user', doc.id.slice(0, 6) + '…', 'hasToken=' + !!d.pushToken, 'lang=' + d.pushLang, 'tz=' + d.pushTz, 'hasData=' + !!d.data);
+    log('user', doc.id.slice(0, 6) + '…', 'hasToken=' + !!d.pushToken, 'lang=' + d.pushLang, 'tz=' + d.pushTz, 'hasData=' + !!d.data);
     if (!d.pushToken) { skipped++; continue; }
 
     let parsed = {};
@@ -44,10 +60,10 @@ async function run(db, siteBase) {
     const force = process.env.FORCE_SEND === 'true';
     if (!force && !inActiveHours(d.pushTz)) { skipped++; continue; }
     // The job runs every ~15 min because GitHub drops many scheduled runs; this makes it send about once an hour.
-    if (!force && d.lastPushAt && Date.now() - d.lastPushAt < 50 * 60 * 1000) { skipped++; continue; }
+    if (!force && d.lastPushAt && Date.now() - d.lastPushAt < 55 * 60 * 1000) { skipped++; continue; }
     const lang = d.pushLang || 'it-IT';
     const list = (parsed.words && parsed.words[lang]) || [];
-    console.log('  words in', lang + ':', list.length);
+    log('  words in', lang + ':', list.length);
     if (!list.length) { skipped++; continue; }
 
     const w = list[Math.floor(Math.random() * list.length)];
@@ -66,7 +82,7 @@ async function run(db, siteBase) {
 
     try {
       const id = await admin.messaging().send(message);
-      console.log('  FCM accepted message:', id);
+      console.log(new Date().toISOString(), 'sent to', doc.id.slice(0, 6) + '…', '| FCM:', id);
       sent++;
       await doc.ref.update({ lastPushAt: Date.now() }).catch((e) => console.error('  could not save lastPushAt:', e.message));
     } catch (e) {
@@ -79,7 +95,7 @@ async function run(db, siteBase) {
       }
     }
   }
-  console.log(`Done. Sent: ${sent}, skipped: ${skipped}.`);
+  if (!quiet) console.log(`Done. Sent: ${sent}, skipped: ${skipped}.`);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
