@@ -178,7 +178,7 @@ const ART={
 const ACC={it:'àèéìòù',fr:'àâçéèêëîïôùûü',es:'áéíóúñü',de:'äöüß',pl:'ąćęłńóśźż',pt:'áàâãçéêíóôõú'};
 const KEY='slova_trainer_v1';
 // Оновлюється при кожному залитті на GitHub: версія і дата/час (за Римом).
-const APP_VERSION='2.1',APP_UPDATED='16.11.2026 13:20';
+const APP_VERSION='2.2',APP_UPDATED='18.11.2026 11:30';
 const ROUND=10;
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 
@@ -599,7 +599,7 @@ function mergeRemote(rm){
       const k=wkey(w),l=map.get(k);
       if(!l){map.set(k,Object.assign({},w,{id:w.id||Date.now().toString(36)+Math.random().toString(36).slice(2,7)}));}
       else{
-        if((w.last||0)>(l.last||0)){l.lvl=w.lvl;l.ok=w.ok;l.bad=w.bad;l.last=w.last;}
+        if((w.last||0)>(l.last||0)){l.lvl=w.lvl;l.ok=w.ok;l.bad=w.bad;l.err=w.err;l.last=w.last;}
         l.t0=Math.max(l.t0||0,w.t0||0);
       }
     }
@@ -874,7 +874,7 @@ function render(){
 }
 
 function renderHome(){
-  const ws=cur(),learned=ws.filter(w=>(w.lvl||0)>=4).length;
+  const ws=cur(),learned=ws.filter(w=>(w.lvl||0)>=4).length,errN=ws.filter(isErr).length;
   let note='';
   if(store.mode==='speak'&&!SR)note='<p class="note warn">Цей браузер не вміє розпізнавати мовлення. Відкрийте застосунок у Chrome або Edge на комп\'ютері.</p>';
   else if(store.mode==='speak')note='<p class="note">Розпізнавання працює найкраще в Chrome або Edge. Браузер попросить доступ до мікрофона.</p>';
@@ -903,6 +903,7 @@ function renderHome(){
       <button class="btn blue" id="add">Додати слова</button>
       <button class="btn ghost" id="list">Мої слова (${ws.length})</button>
       ${store.lang==='it-IT'?'<button class="btn ghost" id="conj">Дієвідмінювання</button>':''}
+      <button class="btn ghost" id="mist" ${errN?'':'disabled'}>Помилки${errN?' ('+errN+')':''}</button>
       ${('speechSynthesis' in window)?'<button class="btn ghost" id="voice">Голос озвучки</button>':''}
       <button class="btn ghost" id="sync">${loggedIn()?'☁ Синхронізація увімкнена':'☁ Синхронізація між пристроями'}</button>
       <button class="btn ghost" id="push">🔔 Нагадування${cloud.pushOn?' (увімкнено)':''}</button>
@@ -918,6 +919,7 @@ function renderHome(){
   $('#add').onclick=()=>go('import');
   $('#list').onclick=()=>{confirmClear=false;go('list');};
   const cj=$('#conj');if(cj)cj.onclick=()=>go('conjsetup');
+  $('#mist').onclick=startMistakes;
   const vb=$('#voice');if(vb)vb.onclick=()=>{voiceTab=null;elevenErr='';azureErr='';go('voice');};
   $('#sync').onclick=()=>go('sync');
   $('#push').onclick=()=>{pushErr='';go('push');};
@@ -1309,6 +1311,17 @@ function bindBank(st,btn,rerender,onSubmit){
   };
 }
 
+/* ---------- mistakes: words answered wrong (first try) until answered right in the Mistakes mode ---------- */
+const isErr=w=>w.err===undefined?(w.bad||0)>0:!!w.err;
+function startMistakes(){
+  const ws=cur().filter(isErr);if(!ws.length)return;
+  const picked=ws.map(w=>w.id);
+  for(let i=picked.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[picked[i],picked[j]]=[picked[j],picked[i]];}
+  const q=picked.slice(0,Math.min(ROUND,picked.length));
+  L={kind:'mist',queue:q,i:0,total:q.length,solved:0,firstOk:0,mist:[],retry:new Set(),stage:'ask',res:null,forceType:false,heard:[],interim:''};
+  go('lesson');
+}
+
 /* ---------- lesson ---------- */
 function startLesson(){
   const ws=cur();if(!ws.length)return;
@@ -1421,8 +1434,8 @@ function commit(){
   }
   if((L.kind||'vocab')!=='conj'&&item.w){
     const w=item.w;
-    if(ok&&first){w.lvl=Math.min(5,(w.lvl||0)+1);w.ok=(w.ok||0)+1;}
-    if(!ok&&first){w.lvl=Math.max(0,(w.lvl||0)-1);w.bad=(w.bad||0)+1;}
+    if(ok&&first){w.lvl=Math.min(5,(w.lvl||0)+1);w.ok=(w.ok||0)+1;if(L.kind==='mist')w.err=0;}
+    if(!ok&&first){w.lvl=Math.max(0,(w.lvl||0)-1);w.bad=(w.bad||0)+1;w.err=1;}
     w.last=Date.now();save();
   }
   L.i++;L.stage='ask';L.res=null;L.forceType=false;
@@ -1444,7 +1457,7 @@ function renderDone(){
     <div class="actions"><button class="btn green" id="more">${conj?'Ще один раунд':'Ще один урок'}</button><button class="btn ghost" id="home">На головну</button></div>
   </main>`;
   $$('[data-i]').forEach(b=>b.onclick=()=>{const it=mist[+b.dataset.i];if(it)say(it.tl);});
-  $('#more').onclick=conj?startConj:startLesson;$('#home').onclick=()=>go('home');
+  $('#more').onclick=conj?startConj:(L.kind==='mist'?startMistakes:startLesson);$('#home').onclick=()=>go('home');
 }
 
 /* ---------- quick word (opened from a push-notification tap) ---------- */
@@ -1471,7 +1484,7 @@ function commitQuick(ok){
     const w=cur().find(x=>x.id===Q.wid);
     if(w){
       if(ok){w.lvl=Math.min(5,(w.lvl||0)+1);w.ok=(w.ok||0)+1;}
-      else{w.lvl=Math.max(0,(w.lvl||0)-1);w.bad=(w.bad||0)+1;}
+      else{w.lvl=Math.max(0,(w.lvl||0)-1);w.bad=(w.bad||0)+1;w.err=1;}
       w.last=Date.now();
     }
   }
