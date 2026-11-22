@@ -178,7 +178,7 @@ const ART={
 const ACC={it:'àèéìòù',fr:'àâçéèêëîïôùûü',es:'áéíóúñü',de:'äöüß',pl:'ąćęłńóśźż',pt:'áàâãçéêíóôõú'};
 const KEY='slova_trainer_v1';
 // Оновлюється при кожному залитті на GitHub: версія і дата/час (за Римом).
-const APP_VERSION='2.2',APP_UPDATED='18.11.2026 11:30';
+const APP_VERSION='2.3',APP_UPDATED='22.11.2026 11:25';
 const ROUND=10;
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 
@@ -904,6 +904,7 @@ function renderHome(){
       <button class="btn ghost" id="list">Мої слова (${ws.length})</button>
       ${store.lang==='it-IT'?'<button class="btn ghost" id="conj">Дієвідмінювання</button>':''}
       <button class="btn ghost" id="mist" ${errN?'':'disabled'}>Помилки${errN?' ('+errN+')':''}</button>
+      <button class="btn ghost" id="quickw" ${ws.length?'':'disabled'}>Слово за хвилину</button>
       ${('speechSynthesis' in window)?'<button class="btn ghost" id="voice">Голос озвучки</button>':''}
       <button class="btn ghost" id="sync">${loggedIn()?'☁ Синхронізація увімкнена':'☁ Синхронізація між пристроями'}</button>
       <button class="btn ghost" id="push">🔔 Нагадування${cloud.pushOn?' (увімкнено)':''}</button>
@@ -920,6 +921,7 @@ function renderHome(){
   $('#list').onclick=()=>{confirmClear=false;go('list');};
   const cj=$('#conj');if(cj)cj.onclick=()=>go('conjsetup');
   $('#mist').onclick=startMistakes;
+  $('#quickw').onclick=startQuick;
   const vb=$('#voice');if(vb)vb.onclick=()=>{voiceTab=null;elevenErr='';azureErr='';go('voice');};
   $('#sync').onclick=()=>go('sync');
   $('#push').onclick=()=>{pushErr='';go('push');};
@@ -1313,6 +1315,15 @@ function bindBank(st,btn,rerender,onSubmit){
 
 /* ---------- mistakes: words answered wrong (first try) until answered right in the Mistakes mode ---------- */
 const isErr=w=>w.err===undefined?(w.bad||0)>0:!!w.err;
+function startQuick(){
+  const ws=cur();if(!ws.length)return;
+  // random word, weaker (lower level) words are more likely
+  const wt=ws.map(w=>1/(1+(w.lvl||0))),tot=wt.reduce((a,b)=>a+b,0);
+  let r=Math.random()*tot,w=ws[ws.length-1];
+  for(let i=0;i<ws.length;i++){r-=wt[i];if(r<=0){w=ws[i];break;}}
+  Q={uk:w.uk,tl:w.tl,lang:store.lang,wid:w.id,stage:'ask',res:null};
+  go('quick');
+}
 function startMistakes(){
   const ws=cur().filter(isErr);if(!ws.length)return;
   const picked=ws.map(w=>w.id);
