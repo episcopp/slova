@@ -103,6 +103,7 @@ button,select,input,textarea{font:inherit;color:inherit}
 .bank-top{display:flex;gap:12px;align-items:flex-start}
 .anslines{flex:1;min-height:112px;display:flex;flex-wrap:wrap;align-content:flex-start;gap:8px;background:repeating-linear-gradient(to bottom,transparent 0 54px,var(--line) 54px 56px)}
 .tile{height:48px;padding:0 16px;border:2px solid var(--line);border-bottom-width:4px;border-radius:14px;background:var(--surface);color:var(--text);font:inherit;font-size:19px;font-weight:800;cursor:pointer}
+.anslines .tile{touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 .tile:active{transform:translateY(2px);border-bottom-width:2px}
 .tile.ghost{background:var(--dis);border-color:transparent;color:transparent;cursor:default;pointer-events:none}
 .tray{display:flex;flex-wrap:wrap;justify-content:center;gap:10px 8px;margin-top:22px}
@@ -178,7 +179,7 @@ const ART={
 const ACC={it:'àèéìòù',fr:'àâçéèêëîïôùûü',es:'áéíóúñü',de:'äöüß',pl:'ąćęłńóśźż',pt:'áàâãçéêíóôõú'};
 const KEY='slova_trainer_v1';
 // Оновлюється при кожному залитті на GitHub: версія і дата/час (за Римом).
-const APP_VERSION='2.3',APP_UPDATED='22.11.2026 11:25';
+const APP_VERSION='2.4',APP_UPDATED='24.11.2026 09:40';
 const ROUND=10;
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 
@@ -1303,9 +1304,41 @@ function bindBank(st,btn,rerender,onSubmit){
   const paint=()=>{
     wrap.innerHTML=bankInner(st);btn.disabled=!st.sel.length;
     $$('[data-pk]',wrap).forEach(b=>b.onclick=()=>{st.sel.push(+b.dataset.pk);paint();});
-    $$('[data-un]',wrap).forEach(b=>b.onclick=()=>{st.sel=st.sel.filter(x=>x!==+b.dataset.un);paint();});
+    $$('[data-un]',wrap).forEach(b=>bindDrag(b));
     $('#tokb',wrap).onclick=()=>{store.input='kbd';save();rerender();};
   };
+  // Answer tiles: a tap removes the tile, dragging it moves it to another position.
+  function bindDrag(el){
+    el.onpointerdown=e=>{
+      if(e.button>0)return;
+      const box=el.parentNode,id=+el.dataset.un,sx=e.clientX,sy=e.clientY;
+      let drag=false,gx=0,gy=0;
+      const others=()=>[...box.children].filter(c=>c!==el);
+      const place=(px,py)=>{
+        let idx=0;const list=others();
+        list.forEach(o=>{const r=o.getBoundingClientRect();if(py>r.bottom||(py>=r.top&&px>r.left+r.width/2))idx++;});
+        const ref=list[idx]||null;
+        if(ref!==el.nextSibling&&!(ref===null&&el.nextSibling===null))box.insertBefore(el,ref);
+        el.style.transform='';const r=el.getBoundingClientRect();
+        el.style.transform=`translate(${px-gx-(r.left+r.width/2)}px,${py-gy-(r.top+r.height/2)}px)`;
+      };
+      el.onpointermove=ev=>{
+        if(!drag){
+          if(Math.hypot(ev.clientX-sx,ev.clientY-sy)<8)return;
+          drag=true;try{el.setPointerCapture(ev.pointerId);}catch(x){}
+          const r=el.getBoundingClientRect();gx=sx-(r.left+r.width/2);gy=sy-(r.top+r.height/2);
+          el.style.position='relative';el.style.zIndex='5';el.style.opacity='.9';el.style.transition='none';
+        }
+        place(ev.clientX,ev.clientY);
+      };
+      const end=ev=>{
+        el.onpointermove=el.onpointerup=el.onpointercancel=null;
+        if(!drag){if(ev.type==='pointerup'){st.sel=st.sel.filter(x=>x!==id);paint();}return;}
+        st.sel=[...box.children].map(c=>+c.dataset.un);paint();
+      };
+      el.onpointerup=end;el.onpointercancel=end;
+    };
+  }
   paint();
   btn.onclick=()=>{
     if(!st.sel.length)return;
